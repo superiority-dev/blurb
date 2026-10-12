@@ -1,0 +1,37 @@
+version: "2"
+
+linters:
+  default: standard
+  enable:
+    - revive
+    - gocritic
+    - nilerr
+    - nilnil
+    - nilnesserr
+    - modernize
+    - intrange
+    - mirror
+    - usestdlibvars
+    - copyloopvar
+    - goconst
+  settings:
+    govet:
+      enable:
+        - nilness
+    errcheck:
+      # No error to act on: writes to output streams, closing a file only read.
+      exclude-functions:
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+        - (*os.File).Close
+        - (io.ReadCloser).Close
+    goconst:
+      min-occurrences: 2
+      ignore-calls: false
+      ignore-tests: true
+
+formatters:
+  enable:
+    - gofmt
+    - goimports

@@ -37,7 +37,7 @@ var (
 	// as 127.0.0.1, 10.0.0.5 or a 6to4 address (2002::/16).
 	ErrAddressNotAllowed = errors.New("fetch: address not allowed")
 
-	// ErrTooManyRedirects is returned after more than maxRedirects redirects.
+	// ErrTooManyRedirects is returned after more than 5 redirects.
 	ErrTooManyRedirects = errors.New("fetch: too many redirects")
 )
 
@@ -60,7 +60,7 @@ type Options struct {
 	// BaseURL resolves relative URLs; nil means URLs must be absolute.
 	BaseURL *url.URL
 
-	// FollowRedirects follows up to maxRedirects redirects, checking each hop
+	// FollowRedirects follows up to 5 redirects, checking each hop
 	// as the first request is checked; when false, a redirect is returned as
 	// an [*OriginStatusError].
 	FollowRedirects bool
@@ -82,7 +82,7 @@ type Fetcher struct {
 // including connection time, any redirects, and reading the body. maxBytes
 // is the largest image a fetch reads. It returns an error when either is not
 // more than zero.
-func New(timeout time.Duration, maxBytes int64, o Options) (*Fetcher, error) {
+func New(timeout time.Duration, maxBytes int64, opts Options) (*Fetcher, error) {
 	if timeout <= 0 {
 		return nil, fmt.Errorf("timeout must be more than zero, got %v", timeout)
 	}
@@ -91,10 +91,14 @@ func New(timeout time.Duration, maxBytes int64, o Options) (*Fetcher, error) {
 		return nil, fmt.Errorf("maxBytes must be more than zero, got %d", maxBytes)
 	}
 
-	f := &Fetcher{allowlist: newAllowlist(o.AllowedHosts), baseURL: o.BaseURL, maxBytes: maxBytes}
+	fetcher := &Fetcher{
+		allowlist: newAllowlist(opts.AllowedHosts),
+		baseURL:   opts.BaseURL,
+		maxBytes:  maxBytes,
+	}
 
 	dialer := &net.Dialer{}
-	if !o.AllowPrivateAddresses {
+	if !opts.AllowPrivateAddresses {
 		dialer.Control = ssrf.Control
 	}
 
@@ -107,9 +111,13 @@ func New(timeout time.Duration, maxBytes int64, o Options) (*Fetcher, error) {
 		MaxResponseHeaderBytes: maxResponseHeaderBytes,
 	}
 
-	f.client = &http.Client{Transport: transport, CheckRedirect: f.checkRedirect(o.FollowRedirects), Timeout: timeout}
+	fetcher.client = &http.Client{
+		Transport:     transport,
+		CheckRedirect: fetcher.checkRedirect(opts.FollowRedirects),
+		Timeout:       timeout,
+	}
 
-	return f, nil
+	return fetcher, nil
 }
 
 // Fetch resolves rawURL against [Options.BaseURL], refuses the URL unless it

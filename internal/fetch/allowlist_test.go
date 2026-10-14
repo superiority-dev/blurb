@@ -3,18 +3,18 @@ package fetch
 import "testing"
 
 func TestNewAllowlistEntries(t *testing.T) {
-	a := newAllowlist(allowlistEntries)
+	list := newAllowlist(allowlistEntries)
 
 	for host, want := range allowlistHosts {
-		if got := a.allows(host); got != want {
+		if got := list.allows(host); got != want {
 			t.Errorf("allows(%q) = %t, want %t", host, got, want)
 		}
 	}
 }
 
 func TestNewAllowlistAll(t *testing.T) {
-	a := newAllowlist([]string{"*"})
-	if !a.allows("anything.example") {
+	list := newAllowlist([]string{"*"})
+	if !list.allows("anything.example") {
 		t.Error("* does not allow every host")
 	}
 }

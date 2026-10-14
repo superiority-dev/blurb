@@ -14,6 +14,7 @@ linters:
     - usestdlibvars
     - copyloopvar
     - goconst
+    - lll
   settings:
     govet:
       enable:
@@ -30,6 +31,9 @@ linters:
       min-occurrences: 2
       ignore-calls: false
       ignore-tests: true
+    lll:
+      line-length: 120
+      tab-width: 4
 
 formatters:
   enable:

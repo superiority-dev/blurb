@@ -51,9 +51,9 @@ func TestFetchBaseURL(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	f := newFetcher(t, testTimeout, testMaxBytes, Options{BaseURL: base})
+	fetcher := newFetcher(t, testTimeout, testMaxBytes, Options{BaseURL: base})
 
-	if got := fetchAll(t, f, "a/b.jpg"); got != "/images/a/b.jpg" {
+	if got := fetchAll(t, fetcher, "a/b.jpg"); got != "/images/a/b.jpg" {
 		t.Errorf("fetched %q, want /images/a/b.jpg", got)
 	}
 }
@@ -66,7 +66,7 @@ func TestFetchRefusesBeforeSending(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	f := newFetcher(t, testTimeout, testMaxBytes, Options{AllowedHosts: []string{"images.example.com"}})
+	fetcher := newFetcher(t, testTimeout, testMaxBytes, Options{AllowedHosts: []string{"images.example.com"}})
 
 	cases := []struct {
 		rawURL string
@@ -79,7 +79,7 @@ func TestFetchRefusesBeforeSending(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		if _, err := f.Fetch(context.Background(), tc.rawURL); !errors.Is(err, tc.want) {
+		if _, err := fetcher.Fetch(context.Background(), tc.rawURL); !errors.Is(err, tc.want) {
 			t.Errorf("%s: got %v, want %v", tc.rawURL, err, tc.want)
 		}
 	}
@@ -91,12 +91,12 @@ func TestFetchPrivateAddress(t *testing.T) {
 	srv := httptest.NewServer(http.NotFoundHandler())
 	defer srv.Close()
 
-	f, err := New(testTimeout, testMaxBytes, Options{AllowedHosts: []string{testHost}})
+	fetcher, err := New(testTimeout, testMaxBytes, Options{AllowedHosts: []string{testHost}})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if _, err := f.Fetch(context.Background(), srv.URL+"/a.jpg"); !errors.Is(err, ErrAddressNotAllowed) {
+	if _, err := fetcher.Fetch(context.Background(), srv.URL+"/a.jpg"); !errors.Is(err, ErrAddressNotAllowed) {
 		t.Errorf("got %v, want ErrAddressNotAllowed", err)
 	}
 }
@@ -106,8 +106,12 @@ func TestFetchPrivateAddress(t *testing.T) {
 // and none when [Options.FollowRedirects] is false.
 func TestFetchRedirects(t *testing.T) {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/image", func(w http.ResponseWriter, _ *http.Request) { fmt.Fprint(w, "ok") })
-	mux.HandleFunc("/to-image", func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, "/image", http.StatusFound) })
+	mux.HandleFunc("/image", func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, "ok")
+	})
+	mux.HandleFunc("/to-image", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/image", http.StatusFound)
+	})
 	mux.HandleFunc("/to-elsewhere", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "http://elsewhere.example/image", http.StatusFound)
 	})
@@ -162,8 +166,8 @@ func TestFetchRedirects(t *testing.T) {
 	}
 }
 
-// TestFetchHeaderLimit requires response headers just under
-// maxResponseHeaderBytes to be read and just over it to be refused.
+// TestFetchHeaderLimit requires response headers 1 KiB under
+// maxResponseHeaderBytes to be read and 1 KiB over it to be refused.
 func TestFetchHeaderLimit(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		n, _ := strconv.Atoi(strings.TrimPrefix(r.URL.Path, "/pad/"))
@@ -171,13 +175,13 @@ func TestFetchHeaderLimit(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	const under, over = 60 << 10, 70 << 10 // 60 KiB and 70 KiB
+	const under, over = 63 << 10, 65 << 10
 
-	f := newFetcher(t, testTimeout, testMaxBytes, Options{})
-	fetchAll(t, f, srv.URL+"/pad/"+strconv.Itoa(under))
+	fetcher := newFetcher(t, testTimeout, testMaxBytes, Options{})
+	fetchAll(t, fetcher, srv.URL+"/pad/"+strconv.Itoa(under))
 
-	if _, err := f.Fetch(context.Background(), srv.URL+"/pad/"+strconv.Itoa(over)); err == nil {
-		t.Error("70 KiB of response headers accepted")
+	if _, err := fetcher.Fetch(context.Background(), srv.URL+"/pad/"+strconv.Itoa(over)); err == nil {
+		t.Error("65 KiB of response headers accepted")
 	}
 }
 
@@ -222,17 +226,18 @@ func TestFetchMaxBytes(t *testing.T) {
 	small := newFetcher(t, testTimeout, size-1, Options{})
 	var tooLarge *http.MaxBytesError
 
-	if _, err := small.Fetch(context.Background(), srv.URL+"/sized"); !errors.As(err, &tooLarge) || tooLarge.Limit != size-1 {
+	if _, err := small.Fetch(context.Background(), srv.URL+"/sized"); !errors.As(err, &tooLarge) ||
+		tooLarge.Limit != size-1 {
 		t.Errorf("by Content-Length: got %v, want an *http.MaxBytesError with limit %d", err, size-1)
 	}
 
-	b, err := small.Fetch(context.Background(), srv.URL+"/chunked")
+	body, err := small.Fetch(context.Background(), srv.URL+"/chunked")
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer b.Close()
+	defer body.Close()
 
-	n, err := io.Copy(io.Discard, b)
+	n, err := io.Copy(io.Discard, body)
 	if !errors.As(err, &tooLarge) || tooLarge.Limit != size-1 || n != size-1 {
 		t.Errorf("while reading: %d bytes, %v; want %d and an *http.MaxBytesError", n, err, size-1)
 	}
@@ -261,13 +266,13 @@ func TestFetchTimeout(t *testing.T) {
 
 	cases := []struct {
 		name     string
-		f        *Fetcher
+		fetcher  *Fetcher
 		deadline time.Duration
 		path     string
 	}{
-		{name: "timeout", f: short, deadline: time.Minute, path: "/slow-headers"},
-		{name: "timeout in the body", f: short, deadline: time.Minute, path: "/slow-body"},
-		{name: "context deadline", f: long, deadline: 50 * time.Millisecond, path: "/slow-headers"},
+		{name: "timeout", fetcher: short, deadline: time.Minute, path: "/slow-headers"},
+		{name: "timeout in the body", fetcher: short, deadline: time.Minute, path: "/slow-body"},
+		{name: "context deadline", fetcher: long, deadline: 50 * time.Millisecond, path: "/slow-headers"},
 	}
 
 	for _, tc := range cases {
@@ -278,10 +283,10 @@ func TestFetchTimeout(t *testing.T) {
 			errc := make(chan error, 1)
 
 			go func() {
-				b, err := tc.f.Fetch(ctx, srv.URL+tc.path)
+				body, err := tc.fetcher.Fetch(ctx, srv.URL+tc.path)
 				if err == nil {
-					_, err = io.ReadAll(b)
-					b.Close()
+					_, err = io.ReadAll(body)
+					body.Close()
 				}
 				errc <- err
 			}()
@@ -324,34 +329,34 @@ func TestFetchable(t *testing.T) {
 }
 
 // newFetcher returns [New]'s [Fetcher] and fails t on an error. It allows
-// private addresses, and testHost when o names no hosts.
-func newFetcher(t *testing.T, timeout time.Duration, maxBytes int64, o Options) *Fetcher {
+// private addresses, and testHost when opts names no hosts.
+func newFetcher(t *testing.T, timeout time.Duration, maxBytes int64, opts Options) *Fetcher {
 	t.Helper()
 
-	if o.AllowedHosts == nil {
-		o.AllowedHosts = []string{testHost}
+	if opts.AllowedHosts == nil {
+		opts.AllowedHosts = []string{testHost}
 	}
 
-	o.AllowPrivateAddresses = true
+	opts.AllowPrivateAddresses = true
 
-	f, err := New(timeout, maxBytes, o)
+	fetcher, err := New(timeout, maxBytes, opts)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	return f
+	return fetcher
 }
 
-func fetchAll(t *testing.T, f *Fetcher, rawURL string) string {
+func fetchAll(t *testing.T, fetcher *Fetcher, rawURL string) string {
 	t.Helper()
 
-	b, err := f.Fetch(context.Background(), rawURL)
+	body, err := fetcher.Fetch(context.Background(), rawURL)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer b.Close()
+	defer body.Close()
 
-	got, err := io.ReadAll(b)
+	got, err := io.ReadAll(body)
 	if err != nil {
 		t.Fatal(err)
 	}

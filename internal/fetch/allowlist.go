@@ -17,22 +17,22 @@ type allowlist struct {
 //
 // Any other entry matches nothing.
 func newAllowlist(entries []string) allowlist {
-	a := allowlist{exact: map[string]bool{}}
+	list := allowlist{exact: map[string]bool{}}
 
-	for _, e := range entries {
-		e = strings.ToLower(e)
+	for _, entry := range entries {
+		entry = strings.ToLower(entry)
 
 		switch {
-		case e == "*":
-			a.all = true
-		case strings.HasPrefix(e, "*.") && len(e) > len("*."):
-			a.suffixes = append(a.suffixes, e[1:])
+		case entry == "*":
+			list.all = true
+		case strings.HasPrefix(entry, "*.") && len(entry) > len("*."):
+			list.suffixes = append(list.suffixes, entry[1:])
 		default:
-			a.exact[e] = true
+			list.exact[entry] = true
 		}
 	}
 
-	return a
+	return list
 }
 
 // allows reports whether host may be fetched from.
@@ -42,8 +42,8 @@ func (a allowlist) allows(host string) bool {
 		return true
 	}
 
-	for _, s := range a.suffixes {
-		if strings.HasSuffix(host, s) && len(host) > len(s) {
+	for _, suffix := range a.suffixes {
+		if strings.HasSuffix(host, suffix) && len(host) > len(suffix) {
 			return true
 		}
 	}

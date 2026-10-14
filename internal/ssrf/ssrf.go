@@ -40,8 +40,8 @@ func allowed(addr netip.Addr) bool {
 	addr = addr.Unmap().WithZone("")
 
 	if nat64.Contains(addr) {
-		b := addr.As16()
-		addr = netip.AddrFrom4([4]byte(b[len(b)-4:]))
+		a := addr.As16()
+		addr = netip.AddrFrom4([4]byte(a[len(a)-4:]))
 	}
 
 	for _, p := range refusedPrefixes {

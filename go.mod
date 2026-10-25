@@ -4,4 +4,8 @@ go 1.26.0
 
 toolchain go1.27.3
 
-require golang.org/x/image v0.47.0
+require (
+	github.com/superiority-dev/blurhash v1.1.0
+	github.com/superiority-dev/thumbhash v1.0.1
+	golang.org/x/image v0.47.0
+)

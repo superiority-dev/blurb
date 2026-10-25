@@ -1,2 +1,6 @@
+github.com/superiority-dev/blurhash v1.1.0 h1:hjJpCzisUOlIHjHAWINnzDzRxH5u1x5d00FVkg7XMmA=
+github.com/superiority-dev/blurhash v1.1.0/go.mod h1:qCT0x8g8eJSz31t1uKyIrKSzSMpC1rE/v18E3V4noo0=
+github.com/superiority-dev/thumbhash v1.0.1 h1:56sGticvN+IgCyrF98hcsqhNk00mTJdFcNVU8L3N8bs=
+github.com/superiority-dev/thumbhash v1.0.1/go.mod h1:l45i4XeeoAqcF0H8oNLnRVP6oEJsHcQuiSCxfwBw7xw=
 golang.org/x/image v0.47.0 h1:za/8gVz++PPZqmZJBNSISICN5Rrj5zixP/8K++fgmqo=
 golang.org/x/image v0.47.0/go.mod h1:IkN5o4A7vq55vXN8FWjjnhg9Rs2GOtffqsSi9mWAKYE=

@@ -21,23 +21,22 @@ var (
 	ErrTimeout = errors.New("queue: waited too long")
 
 	// ErrTooLarge is returned at once for a request estimated to need more
-	// than the whole [Options.MemoryBudgetBytes].
-	ErrTooLarge = errors.New("queue: needs more memory than the budget")
+	// than the whole [Options.MaxMemoryBytes].
+	ErrTooLarge = errors.New("queue: needs more than the memory allowed")
 )
 
 // Options holds a [Queue]'s settings beyond the number of requests it runs at
 // once.
 type Options struct {
-	// MaxWaitingRequests limits the number of requests waiting; 0 means
-	// none wait.
+	// MaxWaitingRequests of 0 means none wait.
 	MaxWaitingRequests int
 
-	// Timeout bounds how long a request waits; 0 means no bound.
+	// Timeout of 0 means no bound.
 	Timeout time.Duration
 
-	// MemoryBudgetBytes bounds the memory the running requests are estimated
+	// MaxMemoryBytes bounds the memory the running requests are estimated
 	// to need together; 0 means no bound beyond the number running.
-	MemoryBudgetBytes int64
+	MaxMemoryBytes int64
 }
 
 // Queue admits requests in arrival order. It is safe for concurrent use.
@@ -59,7 +58,7 @@ type waiter struct {
 // New returns a [Queue] that runs up to concurrency requests at once. It
 // returns an error when concurrency is not more than zero, or
 // [Options.MaxWaitingRequests], [Options.Timeout] or
-// [Options.MemoryBudgetBytes] is negative.
+// [Options.MaxMemoryBytes] is negative.
 func New(concurrency int, opts Options) (*Queue, error) {
 	switch {
 	case concurrency <= 0:
@@ -68,14 +67,14 @@ func New(concurrency int, opts Options) (*Queue, error) {
 		return nil, fmt.Errorf("Options.MaxWaitingRequests must not be negative, got %d", opts.MaxWaitingRequests)
 	case opts.Timeout < 0:
 		return nil, fmt.Errorf("Options.Timeout must not be negative, got %v", opts.Timeout)
-	case opts.MemoryBudgetBytes < 0:
-		return nil, fmt.Errorf("Options.MemoryBudgetBytes must not be negative, got %d", opts.MemoryBudgetBytes)
+	case opts.MaxMemoryBytes < 0:
+		return nil, fmt.Errorf("Options.MaxMemoryBytes must not be negative, got %d", opts.MaxMemoryBytes)
 	}
 
 	return &Queue{
 		slots:              concurrency,
-		bytes:              opts.MemoryBudgetBytes,
-		capacity:           opts.MemoryBudgetBytes,
+		bytes:              opts.MaxMemoryBytes,
+		capacity:           opts.MaxMemoryBytes,
 		maxWaitingRequests: opts.MaxWaitingRequests,
 		timeout:            opts.Timeout,
 	}, nil

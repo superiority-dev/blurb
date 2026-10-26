@@ -57,7 +57,7 @@ type Options struct {
 	// for any host.
 	AllowedHosts []string
 
-	// BaseURL resolves relative URLs; nil means URLs must be absolute.
+	// BaseURL of nil means URLs must be absolute.
 	BaseURL *url.URL
 
 	// FollowRedirects follows up to 5 redirects, checking each hop

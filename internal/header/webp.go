@@ -7,65 +7,99 @@ import (
 	"io"
 )
 
-// A WebP file, as per RFC 9649 sections 2.3 and 2.4: a RIFF header of
-// webpHeaderLen bytes, then chunks, each a FourCC of webpFourCCLen bytes, its
-// payload's size, a little-endian integer of webpSizeLen bytes, then the
-// payload, padded to an even length. A VP8X payload, as per section 2.7, is
-// webpVP8XLen bytes, with the alpha flag webpAlphaFlag; an ANMF payload, as
-// per section 2.7.1.1, starts with a frame header of webpFrameHead bytes,
-// then the frame's chunks. The frame header's 24-bit fields hold the frame's
-// x and y in units of webpFrameUnit pixels, at webpFrameX and webpFrameY, and
-// its width and height less one, at webpFrameWidth and webpFrameHeight.
+// A WebP file, as per RFC 9649 sections 2.3 and 2.4: a RIFF header, then
+// chunks, each a FourCC, its payload's size and the payload, padded to an
+// even length.
 const (
-	webpHeaderLen   = 12
-	webpFourCCLen   = 4
-	webpSizeLen     = 4
-	webpChunkHead   = webpFourCCLen + webpSizeLen
-	webpVP8XLen     = 10
-	webpAlphaFlag   = 1 << 4
-	webpFrameHead   = 16
-	webpFrameUnit   = 2
-	webpFrameX      = 0
-	webpFrameY      = 3
-	webpFrameWidth  = 6
+	webpHeaderLen = 12
+	webpFourCCLen = 4
+
+	// webpSizeLen is the length of a chunk's payload size, a little-endian
+	// integer.
+	webpSizeLen = 4
+
+	webpChunkHead = webpFourCCLen + webpSizeLen
+
+	// webpVP8XLen is the length of a VP8X payload, as per section 2.7.
+	webpVP8XLen = 10
+
+	// webpAlphaFlag is the VP8X flag set when any frame holds alpha.
+	webpAlphaFlag = 1 << 4
+
+	// webpFrameHead is the length of the frame header an ANMF payload starts
+	// with, as per section 2.7.1.1; the frame's chunks follow it.
+	webpFrameHead = 16
+
+	// webpFrameUnit is the frame header's unit of x and y, in pixels.
+	webpFrameUnit = 2
+
+	// webpFrameX is the offset in the frame header of the frame's x, a
+	// 24-bit field.
+	webpFrameX = 0
+
+	// webpFrameY is the offset in the frame header of the frame's y, a
+	// 24-bit field.
+	webpFrameY = 3
+
+	// webpFrameWidth is the offset in the frame header of the frame's width
+	// less one, a 24-bit field.
+	webpFrameWidth = 6
+
+	// webpFrameHeight is the offset in the frame header of the frame's
+	// height less one, a 24-bit field.
 	webpFrameHeight = 9
 )
 
-// A VP8 frame, as per RFC 6386 sections 9.1 and 9.5: a first data partition
-// whose size is a 19-bit field, so under webpFirstPartitionLimit bytes, then
-// up to webpPartitions coefficient data partitions, each but the last with a
-// 24-bit size, so under webpPartitionLimit bytes. x/image's decoder refuses a
-// last one that large or larger, so it holds at most webpMaxFrame bytes of a
-// frame.
+// A VP8 frame's partitions, as per RFC 6386 sections 9.1 and 9.5.
 const (
-	webpFirstPartitionLimit = 1 << 19
-	webpPartitions          = 8
-	webpPartitionLimit      = 1 << 24
-	webpMaxFrame            = webpFirstPartitionLimit + webpPartitions*webpPartitionLimit
+	// webpFirstPartitionLimit is what the first data partition stays under:
+	// its size is a 19-bit field.
+	webpFirstPartitionLimit = 1 << 19 // 512 KiB
+
+	// webpPartitions is the most coefficient data partitions a frame has.
+	webpPartitions = 8
+
+	// webpPartitionLimit is what each coefficient data partition but the
+	// last stays under: its size is a 24-bit field. x/image's decoder
+	// refuses a last one that large or larger.
+	webpPartitionLimit = 1 << 24 // 16 MiB
+
+	// webpMaxFrame is the most bytes of a frame x/image's decoder holds.
+	webpMaxFrame = webpFirstPartitionLimit + webpPartitions*webpPartitionLimit
 )
 
-// Terms of a WebP's decode estimate. A lossy WebP decodes into a 4:2:0 YCbCr
-// image of whole macroblocks, webpYCbCr bytes a pixel, and holds its
-// compressed frame meanwhile, at most webpMaxFrame bytes. Alpha adds a plane
-// and, for lossless-compressed alpha, an NRGBA image it is decoded from,
-// webpAlpha bytes a pixel together. A lossless WebP decodes into an NRGBA
-// image, beside its packed pixels while it unpacks a palette, webpLossless
-// bytes a pixel.
+// Terms of a WebP's decode estimate.
 const (
+	// webpMacroblock is the side of a macroblock, in pixels; a lossy WebP
+	// decodes into an image of whole macroblocks.
 	webpMacroblock = 16
-	webpYCbCr      = 1.5
-	webpAlpha      = 5
-	webpLossless   = 6
+
+	// webpYCbCr is the bytes per pixel of the 4:2:0 YCbCr image a lossy WebP
+	// decodes into, while it holds its compressed frame.
+	webpYCbCr = 1.5
+
+	// webpAlpha is the bytes per pixel alpha adds: a plane and, for
+	// lossless-compressed alpha, an NRGBA image it is decoded from.
+	webpAlpha = 5
+
+	// webpLossless is the bytes per pixel of a lossless WebP: an NRGBA
+	// image, beside its packed pixels while it unpacks a palette.
+	webpLossless = 6
 )
 
 // webpKind is the bitstream a WebP's image data is in.
 type webpKind int
 
-// The bitstreams, named by their chunks as per RFC 9649: VP8 lossy, VP8L
-// lossless; webpUnknown is a walk that ended before either.
+// The bitstreams, named by their chunks as per RFC 9649.
 const (
+	// webpUnknown is the kind of a walk that ended before it found a
+	// bitstream.
 	webpUnknown webpKind = iota
+
+	// webpVP8 is lossy.
 	webpVP8
+
+	// webpVP8L is lossless.
 	webpVP8L
 )
 
@@ -77,12 +111,18 @@ type webpImage struct {
 	// frame is a lossy image's VP8 chunk size, at most webpMaxFrame.
 	frame int64
 
-	// For an animation's first frame: where it lies on the canvas,
-	// whether an ALPH chunk comes with it, and where its chunks start in
-	// the file and how many bytes they take.
-	animated      bool
-	bounds        image.Rectangle
-	alpha         bool
+	// animated reports whether the image is an animation's first frame.
+	animated bool
+
+	// bounds is where an animation's first frame lies on the canvas.
+	bounds image.Rectangle
+
+	// alpha reports whether an ALPH chunk comes with an animation's first
+	// frame.
+	alpha bool
+
+	// start and length are where an animation's first frame's chunks start
+	// in the file and how many bytes they take.
 	start, length int64
 }
 

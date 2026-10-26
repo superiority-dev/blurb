@@ -6,41 +6,59 @@ import (
 	"image"
 )
 
-// JPEG markers, as per ITU-T T.81 table B.1. Each follows jpegPrefix; DHT,
-// JPG and DAC sit among the frame markers SOF0 to SOF15 without being one.
+// jpegPrefix is the byte every JPEG marker follows.
+const jpegPrefix = 0xff
+
+// JPEG markers, as per ITU-T T.81 table B.1.
 const (
-	jpegPrefix = 0xff
-	jpegSOI    = 0xd8
-	jpegSOS    = 0xda
-	jpegAPP1   = 0xe1
-	jpegSOF0   = 0xc0
-	jpegSOF2   = 0xc2
-	jpegSOF15  = 0xcf
-	jpegDHT    = 0xc4
-	jpegJPG    = 0xc8
-	jpegDAC    = 0xcc
+	jpegSOI   = 0xd8
+	jpegSOS   = 0xda
+	jpegAPP1  = 0xe1
+	jpegSOF0  = 0xc0
+	jpegSOF2  = 0xc2
+	jpegSOF15 = 0xcf
 )
 
-// A segment, as per T.81 section B.1.1: the prefix and the marker, then a
-// length that counts its own two bytes and the payload's.
+// JPEG markers among jpegSOF0 to jpegSOF15 that are not frame markers.
 const (
-	jpegMarkerLen   = 2
-	jpegLengthLen   = 2
+	jpegDHT = 0xc4
+	jpegJPG = 0xc8
+	jpegDAC = 0xcc
+)
+
+// A segment, as per T.81 section B.1.1.
+const (
+	jpegMarkerLen = 2
+
+	// jpegLengthLen is the length of a segment's length field, which counts
+	// its own two bytes and the payload's.
+	jpegLengthLen = 2
+
+	// jpegSegmentHead is the marker and the length field a segment starts
+	// with.
 	jpegSegmentHead = jpegMarkerLen + jpegLengthLen
 )
 
-// The frame header, as per T.81 section B.2.2: the component count at
-// jpegFrameComponents, then jpegFrameComponentLen bytes per component from
-// jpegFrameFirstComponent, the sampling factors at jpegComponentSampling,
-// horizontal in the high jpegSamplingBits bits and vertical in the low. A
-// DCT block is jpegDCTBlock pixels on a side.
+// The frame header, as per T.81 section B.2.2.
 const (
-	jpegFrameComponents     = 5
+	// jpegFrameComponents is the offset of the component count.
+	jpegFrameComponents = 5
+
+	// jpegFrameFirstComponent is the offset of the first component.
 	jpegFrameFirstComponent = 6
-	jpegFrameComponentLen   = 3
-	jpegComponentSampling   = 1
-	jpegSamplingBits        = 4
-	jpegDCTBlock            = 8
+
+	jpegFrameComponentLen = 3
+
+	// jpegComponentSampling is the offset in a component of its sampling
+	// factors, horizontal in the high jpegSamplingBits bits and vertical in
+	// the low.
+	jpegComponentSampling = 1
+
+	// jpegSamplingBits is the width of one sampling factor, in bits.
+	jpegSamplingBits = 4
+
+	// jpegDCTBlock is the side of a DCT block, in pixels.
+	jpegDCTBlock = 8
 )
 
 // Terms of a JPEG's decode estimate.
@@ -49,11 +67,13 @@ const (
 	// every coefficient as an int32 until the last scan, then converts.
 	jpegProgressiveFactor = 5
 
-	// jpegCMYKComponents is a CMYK or YCCK JPEG's component count;
-	// jpegCMYKOutput is the bytes per pixel of the image such a JPEG is
-	// converted into, beside its stored samples, however they are subsampled.
+	// jpegCMYKComponents is a CMYK or YCCK JPEG's component count.
 	jpegCMYKComponents = 4
-	jpegCMYKOutput     = 4
+
+	// jpegCMYKOutput is the bytes per pixel of the image a CMYK or YCCK JPEG
+	// is converted into, beside its stored samples, however they are
+	// subsampled.
+	jpegCMYKOutput = 4
 
 	// jpegUnknown is used when the frame header was not found: four
 	// components, unsubsampled and progressive.

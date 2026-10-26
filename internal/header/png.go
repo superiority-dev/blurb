@@ -8,9 +8,9 @@ import (
 	"io"
 )
 
-// A PNG file, as per W3C PNG-3 sections 5.2 and 5.3: a signature of
-// pngSignatureLen bytes, then chunks, each its data's length and its type,
-// the data, and a CRC over the type and the data.
+// A PNG file, as per W3C PNG-3 sections 5.2 and 5.3: a signature, then
+// chunks, each its data's length and its type, the data, and a CRC over the
+// type and the data.
 const (
 	pngSignatureLen   = 8
 	pngChunkLengthLen = 4
@@ -19,15 +19,19 @@ const (
 	pngChunkCRCLen    = 4
 )
 
-// The interlace method, as per PNG-3 section 11.2.1: pngIHDRInterlace bytes
-// into the IHDR chunk's data, after the width, height, bit depth, color type,
-// compression method and filter method. pngInterlaceByte is its offset in the
-// file, after the signature and the IHDR chunk's head; pngAdam7 is the method
-// that interlaces.
+// The interlace method, as per PNG-3 section 11.2.1.
 const (
+	// pngIHDRInterlace is the interlace method's offset in the IHDR chunk's
+	// data, after the width, height, bit depth, color type, compression
+	// method and filter method.
 	pngIHDRInterlace = 12
+
+	// pngInterlaceByte is the interlace method's offset in the file, after
+	// the signature and the IHDR chunk's head.
 	pngInterlaceByte = pngSignatureLen + pngChunkHead + pngIHDRInterlace
-	pngAdam7         = 1
+
+	// pngAdam7 is the method that interlaces.
+	pngAdam7 = 1
 )
 
 // pngInterlaceFactor multiplies an interlaced PNG's image: it decodes each

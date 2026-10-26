@@ -8,12 +8,11 @@ import (
 	"slices"
 )
 
-// dominantCount is the most colors [Dominant] returns; binBits is the bits
-// of red, green and blue that sort a pixel into a bin.
-const (
-	dominantCount = 5
-	binBits       = 4
-)
+// dominantCount is the most colors [Dominant] returns.
+const dominantCount = 5
+
+// binBits is the bits of red, green and blue that sort a pixel into a bin.
+const binBits = 4
 
 // Swatch is one dominant color and the share of the visible pixels it
 // covers.

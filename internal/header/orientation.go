@@ -4,17 +4,23 @@ package header
 // transformation that displays the stored image correctly.
 type Orientation int
 
-// The eight orientations. Rotations are clockwise; [OrientationTranspose]
-// flips across the top-left to bottom-right diagonal, [OrientationTransverse]
-// across the top-right to bottom-left one.
+// The eight orientations. Rotations are clockwise.
 const (
 	OrientationNormal Orientation = iota + 1
 	OrientationFlipHorizontal
 	OrientationRotate180
 	OrientationFlipVertical
+
+	// OrientationTranspose flips across the top-left to bottom-right
+	// diagonal.
 	OrientationTranspose
+
 	OrientationRotate90
+
+	// OrientationTransverse flips across the top-right to bottom-left
+	// diagonal.
 	OrientationTransverse
+
 	OrientationRotate270
 )
 

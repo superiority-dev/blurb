@@ -10,7 +10,7 @@ import (
 
 // TestNew requires [New] to refuse a concurrency not more than zero and a
 // negative [Options.MaxWaitingRequests], [Options.Timeout] or
-// [Options.MemoryBudgetBytes], and to accept zero for those three.
+// [Options.MaxMemoryBytes], and to accept zero for those three.
 func TestNew(t *testing.T) {
 	cases := []struct {
 		concurrency int
@@ -19,7 +19,7 @@ func TestNew(t *testing.T) {
 		{concurrency: 0, opts: Options{}},
 		{concurrency: 1, opts: Options{MaxWaitingRequests: -1}},
 		{concurrency: 1, opts: Options{Timeout: -1}},
-		{concurrency: 1, opts: Options{MemoryBudgetBytes: -1}},
+		{concurrency: 1, opts: Options{MaxMemoryBytes: -1}},
 	}
 
 	for _, tc := range cases {
@@ -29,12 +29,12 @@ func TestNew(t *testing.T) {
 	}
 
 	if _, err := New(1, Options{}); err != nil {
-		t.Errorf("New with MaxWaitingRequests, Timeout and MemoryBudgetBytes at zero: %v", err)
+		t.Errorf("New with MaxWaitingRequests, Timeout and MaxMemoryBytes at zero: %v", err)
 	}
 }
 
 // TestAcquireSlots requires requests to be admitted by the number running,
-// whatever their size when there is no memory budget.
+// whatever their size when there is no memory bound.
 func TestAcquireSlots(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
@@ -87,7 +87,7 @@ func TestAcquireBytes(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cancel()
 
-		queue := newQueue(t, 10, Options{MaxWaitingRequests: 8, MemoryBudgetBytes: 100})
+		queue := newQueue(t, 10, Options{MaxWaitingRequests: 8, MaxMemoryBytes: 100})
 
 		releaseFirst, err := queue.Acquire(ctx, 55)
 		if err != nil {
@@ -135,14 +135,14 @@ func TestAcquireBytes(t *testing.T) {
 	})
 }
 
-// TestAcquireTooLarge requires a request larger than the whole budget to
-// be refused at once rather than wait.
+// TestAcquireTooLarge requires a request larger than the whole
+// [Options.MaxMemoryBytes] to be refused at once rather than wait.
 func TestAcquireTooLarge(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cancel()
 
-		queue := newQueue(t, 1, Options{MaxWaitingRequests: 8, MemoryBudgetBytes: 100})
+		queue := newQueue(t, 1, Options{MaxWaitingRequests: 8, MaxMemoryBytes: 100})
 		if _, err := queue.Acquire(ctx, 101); !errors.Is(err, ErrTooLarge) {
 			t.Errorf("got %v, want ErrTooLarge", err)
 		}
@@ -156,7 +156,7 @@ func TestAcquireCancel(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cancel()
 
-		queue := newQueue(t, 1, Options{MaxWaitingRequests: 8, MemoryBudgetBytes: 100})
+		queue := newQueue(t, 1, Options{MaxWaitingRequests: 8, MaxMemoryBytes: 100})
 
 		release, err := queue.Acquire(ctx, 100)
 		if err != nil {
@@ -269,7 +269,7 @@ func TestAcquireTimeoutWakes(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cancel()
 
-		queue := newQueue(t, 2, Options{MaxWaitingRequests: 2, Timeout: time.Second, MemoryBudgetBytes: 100})
+		queue := newQueue(t, 2, Options{MaxWaitingRequests: 2, Timeout: time.Second, MaxMemoryBytes: 100})
 
 		release, err := queue.Acquire(ctx, 60)
 		if err != nil {

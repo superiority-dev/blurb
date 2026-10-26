@@ -8,12 +8,11 @@ import (
 	"slices"
 )
 
-// Sizes [Hash] is computed at: the hashSide by hashSide lowest
-// frequencies of a dctSide square DCT.
-const (
-	dctSide  = 32
-	hashSide = 8
-)
+// dctSide is the side of the square DCT [Hash] takes of the image.
+const dctSide = 32
+
+// hashSide is the side of the square of lowest frequencies [Hash] keeps.
+const hashSide = 8
 
 // ErrEmpty is returned for an image with no pixels.
 var ErrEmpty = errors.New("phash: empty image")

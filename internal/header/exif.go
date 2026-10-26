@@ -6,24 +6,37 @@ import "encoding/binary"
 // 4.6.4, whose value is one tiffShort.
 const exifTagOrientation = 0x0112
 
-// TIFF's layout, as per TIFF 6.0 section 2: a header of tiffHeaderLen bytes
-// that starts with the byte order and 42 in it, tiffLEHeader or tiffBEHeader,
-// and whose last four, from tiffIFDOffset, give IFD0's offset; an IFD's entry
-// count of tiffIFDCountLen bytes, then entries of tiffIFDEntryLen bytes whose
-// type, count and value start at tiffEntryType, tiffEntryCount and
-// tiffEntryValue. The type tiffShort is a 2-byte integer, which sits in the
-// value's first two bytes.
+// TIFF's layout, as per TIFF 6.0 section 2.
 const (
-	tiffLEHeader    = "II\x2a\x00"
-	tiffBEHeader    = "MM\x00\x2a"
-	tiffHeaderLen   = 8
-	tiffIFDOffset   = 4
-	tiffShort       = 3
+	// tiffLEHeader starts a little-endian header: the byte order, then 42.
+	tiffLEHeader = "II\x2a\x00"
+
+	// tiffBEHeader starts a big-endian header: the byte order, then 42.
+	tiffBEHeader = "MM\x00\x2a"
+
+	tiffHeaderLen = 8
+
+	// tiffIFDOffset is the offset of the header's last four bytes, which give
+	// IFD0's offset.
+	tiffIFDOffset = 4
+
+	// tiffShort is the type of a 2-byte integer, which sits in the first two
+	// bytes of an entry's value.
+	tiffShort = 3
+
+	// tiffIFDCountLen is the length of an IFD's entry count.
 	tiffIFDCountLen = 2
+
 	tiffIFDEntryLen = 12
-	tiffEntryType   = 2
-	tiffEntryCount  = 4
-	tiffEntryValue  = 8
+
+	// tiffEntryType is the offset of an entry's type.
+	tiffEntryType = 2
+
+	// tiffEntryCount is the offset of an entry's count.
+	tiffEntryCount = 4
+
+	// tiffEntryValue is the offset of an entry's value.
+	tiffEntryValue = 8
 )
 
 // exifOrientation reads the orientation tag from IFD0 of EXIF data, which

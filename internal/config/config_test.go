@@ -3,77 +3,104 @@ package config
 import (
 	"log/slog"
 	"math"
+	"net/url"
 	"reflect"
 	"runtime/debug"
 	"strings"
 	"testing"
 	"testing/fstest"
 	"time"
+
+	"github.com/superiority-dev/blurb/internal/testenv"
 )
 
-func TestLoadDefaults(t *testing.T) {
-	cfg, err := Load(env("BLURB_ALLOWED_HOSTS", "images.example.com", "BLURB_ADDR", "  "))
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if cfg.Addr != ":8080" ||
-		cfg.PathPrefix != "" ||
-		cfg.MaxAge != 8760*time.Hour ||
-		!cfg.FollowRedirects ||
-		cfg.AllowPrivateAddresses ||
-		cfg.FetchTimeout != 5*time.Second ||
-		cfg.MaxDownloadBytes != 128<<20 ||
-		cfg.MaxPixels != 50_000_000 ||
-		cfg.MaxConcurrentDecodes != 0 ||
-		cfg.MaxWaitingRequests != -1 ||
-		cfg.QueueTimeout != 5*time.Second ||
-		cfg.LogLevel != slog.LevelInfo ||
-		cfg.ShutdownTimeout != 25*time.Second ||
-		cfg.BaseURL != nil ||
-		cfg.XComponents != 4 ||
-		cfg.YComponents != 3 {
-		t.Errorf("defaults: %+v", cfg)
-	}
-}
-
+// TestLoadValues requires each unset variable to give its default, and each
+// set one its value, surrounding spaces trimmed.
 func TestLoadValues(t *testing.T) {
-	cfg, err := Load(env(
-		"BLURB_ADDR", " 127.0.0.1:1 ",
-		"BLURB_PATH_PREFIX", "/AZaz09/v1.2_~-",
-		"BLURB_ALLOWED_HOSTS", " a.example , b.example ",
-		"BLURB_BASE_URL", "https://cdn.example/images/",
-		"BLURB_FOLLOW_REDIRECTS", "false",
-		"BLURB_ALLOW_PRIVATE_ADDRESSES", "true",
-		"BLURB_FETCH_TIMEOUT", "1500ms",
-		"BLURB_MAX_DOWNLOAD_BYTES", "64 MiB",
-		"BLURB_MAX_WAITING_REQUESTS", "0",
-		"BLURB_QUEUE_TIMEOUT", "2s",
-		"BLURB_MAX_CONCURRENT_DECODES", "4096",
-		"BLURB_LOG_LEVEL", "debug",
-		"BLURB_SHUTDOWN_TIMEOUT", "1s",
-		"BLURB_BLURHASH_COMPONENTS", "9x1",
-	))
-	if err != nil {
-		t.Fatal(err)
+	cases := []struct {
+		name string
+		env  []string
+		want Config
+	}{
+		{
+			name: "defaults",
+			env:  []string{"BLURB_ALLOWED_HOSTS", "images.example.com", "BLURB_ADDR", "  "},
+			want: Config{
+				Addr:                  ":8080",
+				PathPrefix:            "",
+				MaxAge:                8760 * time.Hour,
+				RequestIDHeader:       "X-Request-Id",
+				AllowedHosts:          []string{"images.example.com"},
+				BaseURL:               nil,
+				FollowRedirects:       true,
+				AllowPrivateAddresses: false,
+				FetchTimeout:          5 * time.Second,
+				MaxDownloadBytes:      128 << 20,
+				MaxPixels:             50_000_000,
+				MaxWaitingRequests:    -1,
+				QueueTimeout:          5 * time.Second,
+				MaxConcurrentDecodes:  0,
+				XComponents:           4,
+				YComponents:           3,
+				LogLevel:              slog.LevelInfo,
+				ShutdownTimeout:       25 * time.Second,
+			},
+		},
+		{
+			name: "every variable set",
+			env: []string{
+				"BLURB_ADDR", " 127.0.0.1:1 ",
+				"BLURB_PATH_PREFIX", "/AZaz09/v1.2_~-",
+				"BLURB_MAX_AGE", "0s",
+				"BLURB_REQUEST_ID_HEADER", "AZaz09!#$%&'*+-.^_`|~",
+				"BLURB_ALLOWED_HOSTS", " a.example , b.example ",
+				"BLURB_BASE_URL", "https://cdn.example/images/",
+				"BLURB_FOLLOW_REDIRECTS", "false",
+				"BLURB_ALLOW_PRIVATE_ADDRESSES", "true",
+				"BLURB_FETCH_TIMEOUT", "1500ms",
+				"BLURB_MAX_DOWNLOAD_BYTES", "64 MiB",
+				"BLURB_MAX_MEGAPIXELS", "12.5",
+				"BLURB_MAX_WAITING_REQUESTS", "0",
+				"BLURB_QUEUE_TIMEOUT", "2s",
+				"BLURB_MAX_CONCURRENT_DECODES", "4096",
+				"BLURB_BLURHASH_COMPONENTS", "9x1",
+				"BLURB_LOG_LEVEL", "debug",
+				"BLURB_SHUTDOWN_TIMEOUT", "1s",
+			},
+			want: Config{
+				Addr:                  "127.0.0.1:1",
+				PathPrefix:            "/AZaz09/v1.2_~-",
+				MaxAge:                0,
+				RequestIDHeader:       "AZaz09!#$%&'*+-.^_`|~",
+				AllowedHosts:          []string{"a.example", "b.example"},
+				BaseURL:               &url.URL{Scheme: "https", Host: "cdn.example", Path: "/images/"},
+				FollowRedirects:       false,
+				AllowPrivateAddresses: true,
+				FetchTimeout:          1500 * time.Millisecond,
+				MaxDownloadBytes:      64 << 20,
+				MaxPixels:             12_500_000,
+				MaxWaitingRequests:    0,
+				QueueTimeout:          2 * time.Second,
+				MaxConcurrentDecodes:  4096,
+				XComponents:           9,
+				YComponents:           1,
+				LogLevel:              slog.LevelDebug,
+				ShutdownTimeout:       time.Second,
+			},
+		},
 	}
 
-	if cfg.Addr != "127.0.0.1:1" ||
-		cfg.PathPrefix != "/AZaz09/v1.2_~-" ||
-		strings.Join(cfg.AllowedHosts, "|") != "a.example|b.example" ||
-		cfg.BaseURL.String() != "https://cdn.example/images/" ||
-		cfg.FollowRedirects ||
-		!cfg.AllowPrivateAddresses ||
-		cfg.FetchTimeout != 1500*time.Millisecond ||
-		cfg.MaxDownloadBytes != 64<<20 ||
-		cfg.MaxWaitingRequests != 0 ||
-		cfg.QueueTimeout != 2*time.Second ||
-		cfg.MaxConcurrentDecodes != 4096 ||
-		cfg.LogLevel != slog.LevelDebug ||
-		cfg.ShutdownTimeout != time.Second ||
-		cfg.XComponents != 9 ||
-		cfg.YComponents != 1 {
-		t.Errorf("values: %+v", cfg)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, err := Load(testenv.Lookup(tc.env...))
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if !reflect.DeepEqual(cfg, tc.want) {
+				t.Errorf("got %+v, want %+v", cfg, tc.want)
+			}
+		})
 	}
 }
 
@@ -96,6 +123,9 @@ func TestLoadErrors(t *testing.T) {
 		{name: "MAX_AGE", value: "-1s", want: "whole seconds from 0s to 8760h0m0s"},
 		{name: "MAX_AGE", value: "1500ms", want: "whole seconds from 0s to 8760h0m0s"},
 		{name: "MAX_AGE", value: "8760h1s", want: "whole seconds from 0s to 8760h0m0s"},
+		{name: "REQUEST_ID_HEADER", value: "X Request Id", want: "a header name"},
+		{name: "REQUEST_ID_HEADER", value: "X-Request-Id:", want: "a header name"},
+		{name: "REQUEST_ID_HEADER", value: "X-Réquest-Id", want: "a header name"},
 		{name: "ALLOWED_HOSTS", value: "a.example,,b.example", want: "empty entry"},
 		{name: "BASE_URL", value: "cdn.example/images", want: "absolute http or https URL"},
 		{name: "BASE_URL", value: "https://user:pass@cdn.example/", want: "without credentials"},
@@ -132,20 +162,32 @@ func TestLoadErrors(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name+"="+tc.value, func(t *testing.T) {
-			_, err := Load(env("BLURB_ALLOWED_HOSTS", "a.example", "BLURB_"+tc.name, tc.value))
-			if err == nil ||
-				!strings.Contains(err.Error(), "BLURB_"+tc.name) ||
-				!strings.Contains(err.Error(), tc.want) {
-				t.Errorf("got %v, want an error naming BLURB_%s and saying %q", err, tc.name, tc.want)
+			_, err := Load(testenv.Lookup("BLURB_ALLOWED_HOSTS", "a.example", "BLURB_"+tc.name, tc.value))
+			if err == nil {
+				t.Fatalf("got no error, want one naming BLURB_%s", tc.name)
+			}
+
+			if !strings.Contains(err.Error(), "BLURB_"+tc.name) {
+				t.Errorf("got %v, want it to name BLURB_%s", err, tc.name)
+			}
+
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("got %v, want it to say %q", err, tc.want)
 			}
 		})
 	}
 
-	cfg, err := Load(env("BLURB_FETCH_TIMEOUT", "x", "BLURB_LOG_LEVEL", "x"))
-	if err == nil ||
-		strings.Count(err.Error(), "\n") != 2 ||
-		!strings.Contains(err.Error(), "BLURB_ALLOWED_HOSTS is required") {
-		t.Errorf("got %v, want three problems reported together, BLURB_ALLOWED_HOSTS required among them", err)
+	cfg, err := Load(testenv.Lookup("BLURB_FETCH_TIMEOUT", "x", "BLURB_LOG_LEVEL", "x"))
+	if err == nil {
+		t.Fatal("got no error, want three problems reported together")
+	}
+
+	if n := strings.Count(err.Error(), "\n") + 1; n != 3 {
+		t.Errorf("got %d problems, want 3: %v", n, err)
+	}
+
+	if !strings.Contains(err.Error(), "BLURB_ALLOWED_HOSTS is required") {
+		t.Errorf("got %v, want BLURB_ALLOWED_HOSTS required among the problems", err)
 	}
 
 	if !reflect.ValueOf(cfg).IsZero() {
@@ -167,28 +209,32 @@ func TestLoadMegapixels(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		cfg, err := Load(env("BLURB_ALLOWED_HOSTS", "a.example", "BLURB_MAX_MEGAPIXELS", tc.value))
+		cfg, err := Load(testenv.Lookup("BLURB_ALLOWED_HOSTS", "a.example", "BLURB_MAX_MEGAPIXELS", tc.value))
 		if err != nil || cfg.MaxPixels != tc.want {
 			t.Errorf("%s: got %d, %v; want %d", tc.value, cfg.MaxPixels, err, tc.want)
 		}
 	}
 }
 
-// TestLoadDownloadBytesLimit requires MAX_DOWNLOAD_BYTES to accept 2^62
-// bytes, in GiB too.
-func TestLoadDownloadBytesLimit(t *testing.T) {
-	cfg, err := Load(env("BLURB_ALLOWED_HOSTS", "a.example", "BLURB_MAX_DOWNLOAD_BYTES", "4294967296GiB"))
-	if err != nil || cfg.MaxDownloadBytes != 1<<62 {
-		t.Errorf("got %d, %v; want 2^62", cfg.MaxDownloadBytes, err)
+// TestLoadDownloadBytes requires MAX_DOWNLOAD_BYTES to give the exact byte
+// count in each unit or none, up to 2^62.
+func TestLoadDownloadBytes(t *testing.T) {
+	cases := []struct {
+		value string
+		want  int64
+	}{
+		{value: "134217728", want: 128 << 20},
+		{value: "1B", want: 1},
+		{value: "1KiB", want: 1 << 10},
+		{value: "1MiB", want: 1 << 20},
+		{value: "4294967296GiB", want: 1 << 62},
 	}
-}
 
-// TestLoadMaxAgeZero requires a MAX_AGE of 0, which sends no-store, to
-// be accepted.
-func TestLoadMaxAgeZero(t *testing.T) {
-	cfg, err := Load(env("BLURB_ALLOWED_HOSTS", "a.example", "BLURB_MAX_AGE", "0s"))
-	if err != nil || cfg.MaxAge != 0 {
-		t.Errorf("got %v, %v; want 0 and no error", cfg.MaxAge, err)
+	for _, tc := range cases {
+		cfg, err := Load(testenv.Lookup("BLURB_ALLOWED_HOSTS", "a.example", "BLURB_MAX_DOWNLOAD_BYTES", tc.value))
+		if err != nil || cfg.MaxDownloadBytes != tc.want {
+			t.Errorf("%s: got %d, %v; want %d", tc.value, cfg.MaxDownloadBytes, err, tc.want)
+		}
 	}
 }
 
@@ -274,19 +320,18 @@ func TestMemoryLimit(t *testing.T) {
 
 func TestParseCgroupLimit(t *testing.T) {
 	cases := []struct {
-		in     string
-		want   int64
-		wantOK bool
+		in   string
+		want int64
 	}{
-		{in: "4611686018427387903\n", want: 4611686018427387903, wantOK: true},
-		{in: "4611686018427387904\n", want: 0, wantOK: false},
-		{in: "0\n", want: 0, wantOK: false},
+		{in: "4611686018427387903\n", want: 4611686018427387903},
+		{in: "4611686018427387904\n", want: 0},
+		{in: "0\n", want: 0},
 	}
 
 	for _, tc := range cases {
 		got, ok := parseCgroupLimit(tc.in)
-		if got != tc.want || ok != tc.wantOK {
-			t.Errorf("parseCgroupLimit(%q) = %d, %t; want %d, %t", tc.in, got, ok, tc.want, tc.wantOK)
+		if got != tc.want || ok != (tc.want > 0) {
+			t.Errorf("parseCgroupLimit(%q) = %d, %t; want %d, %t", tc.in, got, ok, tc.want, tc.want > 0)
 		}
 	}
 }
@@ -329,17 +374,5 @@ func TestCgroupMemoryLimit(t *testing.T) {
 				t.Errorf("got %d from %q, %t; want %d from %q", got, src, ok, tc.want, tc.wantSrc)
 			}
 		})
-	}
-}
-
-func env(kv ...string) func(string) (string, bool) {
-	env := map[string]string{}
-	for i := 0; i < len(kv); i += 2 {
-		env[kv[i]] = kv[i+1]
-	}
-
-	return func(key string) (string, bool) {
-		v, ok := env[key]
-		return v, ok
 	}
 }

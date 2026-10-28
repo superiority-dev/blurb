@@ -39,9 +39,18 @@ var (
 
 	// ErrTooManyRedirects is returned after more than 5 redirects.
 	ErrTooManyRedirects = errors.New("fetch: too many redirects")
+
+	// ErrOriginCut is returned when the body of a fetched image ends before
+	// all of it arrived.
+	ErrOriginCut = errors.New("fetch: origin body ended early")
+
+	// ErrOriginMalformed is returned when the body of a fetched image is
+	// malformed, such as broken chunked encoding.
+	ErrOriginMalformed = errors.New("fetch: origin body is malformed")
 )
 
-// OriginStatusError reports an origin's answer other than 200 OK.
+// OriginStatusError is returned when the origin answers with a status other
+// than 200 OK.
 type OriginStatusError struct {
 	Status int
 }
@@ -57,11 +66,11 @@ type Options struct {
 	// for any host.
 	AllowedHosts []string
 
-	// BaseURL of nil means URLs must be absolute.
+	// BaseURL resolves relative URLs; nil means URLs must be absolute.
 	BaseURL *url.URL
 
-	// FollowRedirects follows up to 5 redirects, checking each hop
-	// as the first request is checked; when false, a redirect is returned as
+	// FollowRedirects, if true, makes [Fetcher.Fetch] follow up to 5 redirects,
+	// each checked as the first request is; if false, a redirect is returned as
 	// an [*OriginStatusError].
 	FollowRedirects bool
 
@@ -70,18 +79,19 @@ type Options struct {
 	AllowPrivateAddresses bool
 }
 
-// Fetcher fetches images. It is safe for concurrent use.
+// Fetcher is an HTTP client for images on the allowed hosts. It is safe for
+// concurrent use. A Fetcher must be created with [New].
 type Fetcher struct {
 	client    *http.Client
 	allowlist allowlist
 	baseURL   *url.URL
+	timeout   time.Duration
 	maxBytes  int64
 }
 
-// New returns a [Fetcher]. timeout is the time limit for each fetch,
-// including connection time, any redirects, and reading the body. maxBytes
-// is the largest image a fetch reads. It returns an error when either is not
-// more than zero.
+// New returns a [Fetcher]. timeout is the time limit for each fetch, including
+// connection time, any redirects, and reading the body. maxBytes is the largest
+// image a fetch reads. It returns an error unless both are positive.
 func New(timeout time.Duration, maxBytes int64, opts Options) (*Fetcher, error) {
 	if timeout <= 0 {
 		return nil, fmt.Errorf("timeout must be more than zero, got %v", timeout)
@@ -94,6 +104,7 @@ func New(timeout time.Duration, maxBytes int64, opts Options) (*Fetcher, error) 
 	fetcher := &Fetcher{
 		allowlist: newAllowlist(opts.AllowedHosts),
 		baseURL:   opts.BaseURL,
+		timeout:   timeout,
 		maxBytes:  maxBytes,
 	}
 
@@ -114,56 +125,71 @@ func New(timeout time.Duration, maxBytes int64, opts Options) (*Fetcher, error) 
 	fetcher.client = &http.Client{
 		Transport:     transport,
 		CheckRedirect: fetcher.checkRedirect(opts.FollowRedirects),
-		Timeout:       timeout,
 	}
 
 	return fetcher, nil
 }
 
-// Fetch resolves rawURL against [Options.BaseURL], refuses the URL unless it
-// is [Fetchable] and its host is allowed, and returns the image's body.
-// The body reads at most [New]'s maxBytes and must be closed. Fetch's error
-// matches one of [ErrBadURL], [ErrBadRedirect], [ErrHostNotAllowed],
-// [ErrAddressNotAllowed] and [ErrTooManyRedirects] under [errors.Is], is an
-// [*OriginStatusError] or an [*http.MaxBytesError], or is a transport error.
-// Reading the body past maxBytes gives an [*http.MaxBytesError]. When [New]'s
-// timeout expires or ctx reaches its deadline, Fetch or a read of the body
-// returns an error matching [context.DeadlineExceeded].
-func (f *Fetcher) Fetch(ctx context.Context, rawURL string) (io.ReadCloser, error) {
+// Fetch gets the image at rawURL, resolved against [Options.BaseURL]. The
+// image result is the response body: it must be closed, a read past [New]'s
+// maxBytes returns an [*http.MaxBytesError], and its PauseDeadline and
+// ResumeDeadline methods pause and resume [New]'s timeout. The declared
+// result is the response's Content-Length, or -1 when it is unknown.
+//
+// The error matches one of [ErrBadURL], [ErrBadRedirect], [ErrHostNotAllowed],
+// [ErrAddressNotAllowed] and [ErrTooManyRedirects] under [errors.Is], or is
+// an [*OriginStatusError], an [*http.MaxBytesError] or a transport error.
+// When the timeout or ctx's deadline passes, Fetch or a body read returns an
+// error matching [context.DeadlineExceeded]. A body read can also return an
+// error matching [ErrOriginCut] or [ErrOriginMalformed].
+func (f *Fetcher) Fetch(ctx context.Context, rawURL string) (image io.ReadCloser, declared int64, err error) {
 	u, err := f.resolve(rawURL)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
 	if !f.allowlist.allows(u.Hostname()) {
-		return nil, ErrHostNotAllowed
+		return nil, 0, ErrHostNotAllowed
 	}
+
+	ctx, cancel := context.WithCancelCause(ctx)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
-		return nil, ErrBadURL
+		cancel(nil)
+		return nil, 0, ErrBadURL
 	}
+
+	dl := newDeadline(f.timeout, cancel)
 
 	resp, err := f.client.Do(req)
 	if err != nil {
+		dl.stop()
+
 		if errors.Is(err, ssrf.ErrNotAllowed) {
-			return nil, ErrAddressNotAllowed
+			return nil, 0, ErrAddressNotAllowed
 		}
 
-		return nil, err
+		return nil, 0, err
 	}
 
 	if resp.StatusCode != http.StatusOK {
 		resp.Body.Close()
-		return nil, &OriginStatusError{Status: resp.StatusCode}
+		dl.stop()
+
+		return nil, 0, &OriginStatusError{Status: resp.StatusCode}
 	}
 
 	if resp.ContentLength > f.maxBytes {
 		resp.Body.Close()
-		return nil, &http.MaxBytesError{Limit: f.maxBytes}
+		dl.stop()
+
+		return nil, 0, &http.MaxBytesError{Limit: f.maxBytes}
 	}
 
-	return http.MaxBytesReader(nil, resp.Body, f.maxBytes), nil
+	limited := http.MaxBytesReader(nil, resp.Body, f.maxBytes)
+
+	return &body{r: limited, dl: dl}, resp.ContentLength, nil
 }
 
 func (f *Fetcher) resolve(rawURL string) (*url.URL, error) {
@@ -207,6 +233,47 @@ func (f *Fetcher) checkRedirect(follow bool) func(*http.Request, []*http.Request
 
 		return nil
 	}
+}
+
+// body holds a fetch's response body and its deadline; closing it ends the
+// fetch.
+type body struct {
+	r  io.ReadCloser
+	dl *deadline
+}
+
+func (b *body) Read(p []byte) (int, error) {
+	n, err := b.r.Read(p)
+	if err == nil || err == io.EOF {
+		return n, err
+	}
+
+	_, transport := errors.AsType[net.Error](err)
+	_, tooLarge := errors.AsType[*http.MaxBytesError](err)
+
+	if transport || tooLarge || errors.Is(err, context.Canceled) {
+		return n, err
+	}
+
+	class := ErrOriginMalformed
+	if errors.Is(err, io.ErrUnexpectedEOF) {
+		class = ErrOriginCut
+	}
+
+	return n, fmt.Errorf("%w: %w", class, err)
+}
+
+// PauseDeadline stops counting time against the timeout until
+// ResumeDeadline, unless the timeout has already run out.
+func (b *body) PauseDeadline() { b.dl.pause() }
+
+// ResumeDeadline starts counting time against the timeout again, from where
+// PauseDeadline stopped.
+func (b *body) ResumeDeadline() { b.dl.resume() }
+
+func (b *body) Close() error {
+	defer b.dl.stop()
+	return b.r.Close()
 }
 
 // Fetchable reports whether u is an absolute http or https URL with a host

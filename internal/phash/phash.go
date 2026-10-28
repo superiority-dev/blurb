@@ -6,6 +6,8 @@ import (
 	"errors"
 	"image"
 	"slices"
+
+	"github.com/superiority-dev/blurb/internal/cells"
 )
 
 // dctSide is the side of the square DCT [Hash] takes of the image.
@@ -82,10 +84,10 @@ func lumaGrid(img *image.RGBA, w, h int) []int64 {
 	out := make([]int64, w*h)
 
 	for oy := range h {
-		y0, y1 := cellSpan(oy, h, b.Dy())
+		y0, y1 := cells.Span(oy, h, b.Dy())
 
 		for ox := range w {
-			x0, x1 := cellSpan(ox, w, b.Dx())
+			x0, x1 := cells.Span(ox, w, b.Dx())
 
 			var sum int64
 
@@ -102,13 +104,6 @@ func lumaGrid(img *image.RGBA, w, h int) []int64 {
 	}
 
 	return out
-}
-
-// cellSpan is the range of source pixels cell i of n covers along a side
-// of size pixels: from i*size/n to (i+1)*size/n, rounded down, never empty.
-func cellSpan(i, n, size int) (lo, hi int) {
-	lo = i * size / n
-	return lo, max((i+1)*size/n, lo+1)
 }
 
 // dctBasis is cos(pi*k*(2x+1)/(2*dctSide)) scaled by 2^14, from cosQ14

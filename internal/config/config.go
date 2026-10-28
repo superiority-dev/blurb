@@ -27,8 +27,8 @@ const megapixel = 1_000_000
 // not set.
 const unsetWaiting = -1
 
-// waitingPerSlot is how many requests [Config.DecodeLimits] lets wait per
-// decode allowed at once when MAX_WAITING_REQUESTS is not set.
+// waitingPerSlot is how many requests may wait per decode slot when
+// MAX_WAITING_REQUESTS is not set.
 const waitingPerSlot = 4
 
 // memoryLimitHeadroomPercent is the part of the memory limit
@@ -39,11 +39,16 @@ const memoryLimitHeadroomPercent = 25
 type Config struct {
 	Addr string
 
-	// PathPrefix is prepended to the API's routes; the probes keep theirs.
+	// PathPrefix, such as /v1, is prepended to /hash but not to the probes.
 	PathPrefix string
 
-	// MaxAge of 0 sends no-store.
+	// MaxAge is the Cache-Control max-age sent with a hash of a fetched image;
+	// 0 sends no-store.
 	MaxAge time.Duration
+
+	// RequestIDHeader names the header a request id is read from and sent
+	// back in.
+	RequestIDHeader string
 
 	AllowedHosts []string
 
@@ -54,7 +59,8 @@ type Config struct {
 	FollowRedirects       bool
 	AllowPrivateAddresses bool
 
-	// FetchTimeout covers the header and the body, not a wait for a decode
+	// FetchTimeout is the time limit for each fetch, including connection
+	// time, any redirects and reading the body, but not a wait for a decode
 	// slot.
 	FetchTimeout time.Duration
 
@@ -64,14 +70,17 @@ type Config struct {
 	// MaxWaitingRequests of 0 means none wait, and -1 that it is not set.
 	MaxWaitingRequests int
 
-	// QueueTimeout bounds a wait for a decode slot; a longer one is answered
-	// 503.
+	// QueueTimeout bounds a wait for a decode slot; a request that waits
+	// longer is answered 503.
 	QueueTimeout time.Duration
 
 	// MaxConcurrentDecodes of 0 means GOMAXPROCS.
 	MaxConcurrentDecodes int
 
+	// XComponents is the number of horizontal BlurHash components.
 	XComponents int
+
+	// YComponents is the number of vertical BlurHash components.
 	YComponents int
 
 	LogLevel        slog.Level
@@ -79,7 +88,7 @@ type Config struct {
 }
 
 // Load reads every setting through lookup, which has the signature of
-// os.LookupEnv, and returns all the problems it finds at once.
+// [os.LookupEnv], and returns all the problems it finds at once.
 func Load(lookup func(string) (string, bool)) (Config, error) {
 	env := reader{lookup: lookup}
 
@@ -87,6 +96,7 @@ func Load(lookup func(string) (string, bool)) (Config, error) {
 		Addr:                  env.str("ADDR", ":8080"),
 		PathPrefix:            env.pathPrefix("PATH_PREFIX"),
 		MaxAge:                env.seconds("MAX_AGE", year, maxAgeLimit),
+		RequestIDHeader:       env.headerName("REQUEST_ID_HEADER", "X-Request-Id"),
 		AllowedHosts:          env.allowlist("ALLOWED_HOSTS"),
 		BaseURL:               env.url("BASE_URL"),
 		FollowRedirects:       env.bool("FOLLOW_REDIRECTS", true),
@@ -113,7 +123,7 @@ func Load(lookup func(string) (string, bool)) (Config, error) {
 // DecodeLimits returns the [DecodeLimits] for a process whose memory limit is
 // memoryLimit bytes, 0 for none, and whose GOMAXPROCS is gomaxprocs.
 func (c Config) DecodeLimits(memoryLimit int64, gomaxprocs int) DecodeLimits {
-	// Split by 100 first so memoryLimit times the percent cannot overflow.
+	// Divide by 100 first so memoryLimit times the percent cannot overflow.
 	headroom := memoryLimit/100*memoryLimitHeadroomPercent + memoryLimit%100*memoryLimitHeadroomPercent/100
 
 	limits := DecodeLimits{
@@ -132,8 +142,8 @@ func (c Config) DecodeLimits(memoryLimit int64, gomaxprocs int) DecodeLimits {
 	return limits
 }
 
-// DecodeLimits is the memory the decodes may use together, how many may run
-// at once and how many may wait.
+// DecodeLimits holds the memory the decodes may use together, how many may
+// run at once and how many may wait.
 type DecodeLimits struct {
 	// MaxMemoryBytes of 0 means no bound.
 	MaxMemoryBytes int64

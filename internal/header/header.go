@@ -10,6 +10,8 @@ import (
 	"image/png"
 	"io"
 
+	"github.com/superiority-dev/blurb/internal/readers"
+
 	// Register the GIF decoder with image.DecodeConfig.
 	_ "image/gif"
 
@@ -17,7 +19,7 @@ import (
 	_ "golang.org/x/image/webp"
 )
 
-// maxBytes is the most of the input [Read] takes before giving up.
+// maxBytes is the most of the input [Read] reads.
 const maxBytes = 1 << 20 // 1 MiB
 
 var (
@@ -41,7 +43,7 @@ type UnsupportedFeatureError struct {
 	Format Format
 
 	// Feature is the decoder's name for what it does not implement, such as
-	// "precision" for a JPEG that is not 8 bits a sample.
+	// "precision" for a JPEG that is not 8 bits per sample.
 	Feature string
 }
 
@@ -52,7 +54,8 @@ func (e *UnsupportedFeatureError) Error() string {
 // Format is an image format, named as [image.DecodeConfig] names it.
 type Format string
 
-// The formats [Read] and the decode estimate treat apart.
+// The formats whose headers [Read] scans for more than [image.DecodeConfig]
+// reports.
 const (
 	formatJPEG Format = "jpeg"
 	formatPNG  Format = "png"
@@ -68,8 +71,7 @@ type Info struct {
 	// Orientation is [OrientationNormal] when [Read] finds none.
 	Orientation Orientation
 
-	// DecodeBytes estimates the most memory decoding the image holds at
-	// once.
+	// DecodeBytes estimates the peak memory decoding the image needs.
 	DecodeBytes int64
 
 	// Frame is where an animation's first frame lies on its canvas when
@@ -77,10 +79,11 @@ type Info struct {
 	Frame image.Rectangle
 }
 
-// newInfo returns the [Info] for the image [image.DecodeConfig] read as cfg,
-// whose header starts with buf and goes on in rest, and, for an animated
-// WebP, the splice that makes it read as its first frame alone; or
-// [ErrUnreadable] when cfg has no pixels.
+// newInfo returns the [Info] for an image whose [image.DecodeConfig] result is
+// cfg; buf holds the bytes read so far and rest reads the bytes after them. For
+// an animated WebP whose first frame's bitstream scanWebP found, it also
+// returns the splice that makes the image read as that frame alone. It returns
+// [ErrUnreadable] for no pixels or a frame not within the canvas.
 func newInfo(cfg image.Config, format Format, buf []byte, rest io.Reader) (Info, *webpSplice, error) {
 	if cfg.Width <= 0 || cfg.Height <= 0 {
 		return Info{}, nil, ErrUnreadable
@@ -122,22 +125,19 @@ func newInfo(cfg image.Config, format Format, buf []byte, rest io.Reader) (Info,
 }
 
 // Read reads r's header, up to 1 MiB: as much as [image.DecodeConfig] needs
-// and, for a PNG or a WebP, its chunks up to the image data. It returns what
-// the header says and a reader that replays what was read before the rest of
-// r; for an animated WebP, the reader reads as a WebP of the first frame
-// alone, then goes on into the rest of r. It can return
-// [ErrUnsupportedFormat], an [*UnsupportedFeatureError], [ErrTooLarge],
-// [ErrUnreadable] or, when r fails, r's error.
-func Read(r io.Reader) (Info, io.Reader, error) {
+// and, for a PNG or a WebP, its chunks up to the image data. The info result is
+// what the header says. The rest result replays what was read, then reads on
+// into r; when [Info.Frame] is not empty, it reads instead as a WebP of the
+// animation's first frame alone, followed by the rest of r. The error matches
+// one of [ErrUnsupportedFormat], [ErrTooLarge] and [ErrUnreadable] under
+// [errors.Is], or is an [*UnsupportedFeatureError] or, when r fails, r's error.
+func Read(r io.Reader) (info Info, rest io.Reader, err error) {
 	var buf bytes.Buffer
 
-	src := &stickyReader{r: r}
+	src := &readers.Sticky{R: r}
 	in := io.TeeReader(io.LimitReader(src, maxBytes), &buf)
 
-	var (
-		info   Info
-		splice *webpSplice
-	)
+	var splice *webpSplice
 
 	cfg, format, err := image.DecodeConfig(in)
 	if err == nil {
@@ -146,8 +146,8 @@ func Read(r io.Reader) (Info, io.Reader, error) {
 		err = configError(err, Format(format), buf.Len())
 	}
 
-	if src.err != nil {
-		return Info{}, nil, src.err
+	if src.Err() != nil {
+		return Info{}, nil, src.Err()
 	}
 
 	if err != nil {
@@ -159,26 +159,6 @@ func Read(r io.Reader) (Info, io.Reader, error) {
 	}
 
 	return info, io.MultiReader(&buf, r), nil
-}
-
-// stickyReader reads through r; once r returns an error other than io.EOF,
-// every later read returns it.
-type stickyReader struct {
-	r   io.Reader
-	err error
-}
-
-func (s *stickyReader) Read(p []byte) (int, error) {
-	if s.err != nil {
-		return 0, s.err
-	}
-
-	n, err := s.r.Read(p)
-	if err != nil && err != io.EOF {
-		s.err = err
-	}
-
-	return n, err
 }
 
 // configError returns the error [Read] reports when [image.DecodeConfig]

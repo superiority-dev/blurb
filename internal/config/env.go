@@ -28,7 +28,7 @@ var byteUnits = []struct {
 	{suffix: "B", shift: 0},
 }
 
-// reader reads prefixed variables and collects every problem.
+// reader holds the lookup of BLURB_ variables and every problem found in them.
 type reader struct {
 	lookup func(string) (string, bool)
 	errs   []error
@@ -73,6 +73,20 @@ func (r *reader) pathPrefix(name string) string {
 			`must be a path such as /v1, segments of letters, digits and "-._~", not "." or "..", got %q`,
 			v,
 		))
+		return ""
+	}
+
+	return v
+}
+
+func (r *reader) headerName(name, def string) string {
+	v, ok := r.get(name)
+	if !ok {
+		return def
+	}
+
+	if strings.ContainsFunc(v, func(c rune) bool { return !tchar(c) }) {
+		r.fail(name, fmt.Sprintf("must be a header name such as X-Request-Id, got %q", v))
 		return ""
 	}
 
@@ -255,7 +269,7 @@ func (r *reader) bytes(name string, def int64) int64 {
 	return n << shift
 }
 
-func (r *reader) components(name string, defX, defY int) (int, int) {
+func (r *reader) components(name string, defX, defY int) (xComponents, yComponents int) {
 	v, ok := r.get(name)
 	if !ok {
 		return defX, defY
@@ -300,4 +314,11 @@ func (r *reader) mustBePositive(name string, positive bool, got any) {
 // path carries as it is.
 func unreserved(c rune) bool {
 	return 'a' <= c && c <= 'z' || 'A' <= c && c <= 'Z' || '0' <= c && c <= '9' || strings.ContainsRune("-._~", c)
+}
+
+// tchar reports whether c may appear in a header name, as per RFC 9110
+// section 5.6.2.
+func tchar(c rune) bool {
+	return 'a' <= c && c <= 'z' || 'A' <= c && c <= 'Z' || '0' <= c && c <= '9' ||
+		strings.ContainsRune("!#$%&'*+-.^_`|~", c)
 }

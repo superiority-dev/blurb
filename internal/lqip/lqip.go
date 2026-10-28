@@ -8,6 +8,8 @@ import (
 	"errors"
 	"image"
 	"image/png"
+
+	"github.com/superiority-dev/blurb/internal/cells"
 )
 
 // maxSide bounds the placeholder's width and height, in pixels.
@@ -33,10 +35,10 @@ func DataURI(img *image.RGBA) (string, error) {
 	small := image.NewRGBA(image.Rect(0, 0, w, h))
 
 	for oy := range h {
-		y0, y1 := cellSpan(oy, h, b.Dy())
+		y0, y1 := cells.Span(oy, h, b.Dy())
 
 		for ox := range w {
-			x0, x1 := cellSpan(ox, w, b.Dx())
+			x0, x1 := cells.Span(ox, w, b.Dx())
 
 			var sum [4]int
 
@@ -64,11 +66,4 @@ func DataURI(img *image.RGBA) (string, error) {
 	}
 
 	return "data:image/png;base64," + base64.StdEncoding.EncodeToString(buf.Bytes()), nil
-}
-
-// cellSpan is the range of source pixels cell i of n covers along a side
-// of size pixels: from i*size/n to (i+1)*size/n, rounded down, never empty.
-func cellSpan(i, n, size int) (lo, hi int) {
-	lo = i * size / n
-	return lo, max((i+1)*size/n, lo+1)
 }

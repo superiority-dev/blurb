@@ -6,14 +6,12 @@ import (
 	"errors"
 	"image"
 	"image/color"
-	"image/gif"
 	"testing"
 
 	"github.com/superiority-dev/blurb/internal/header"
+	"github.com/superiority-dev/blurb/internal/testimage"
 	"github.com/superiority-dev/blurhash"
 	"github.com/superiority-dev/thumbhash"
-
-	"github.com/superiority-dev/blurb/internal/testimage"
 )
 
 // TestSmall requires each format's picture, and a portrait one, to give the
@@ -45,14 +43,14 @@ func TestSmall(t *testing.T) {
 		},
 		{
 			name:      "portrait JPEG",
-			data:      testimage.EncodeJPEG(t, testimage.Gradient(200, 300)),
+			data:      testimage.GradientJPEG(t, 200, 300),
 			alpha:     false,
 			blurHash:  "L$HLl02U$6SghrawfMf8gZfdfTfl",
 			thumbHash: "df070a451a7087727677856898877778838008f877",
 		},
 		{
 			name:      "GIF",
-			data:      encodeGIF(t, src),
+			data:      testimage.EncodeGIF(t, src),
 			alpha:     false,
 			blurHash:  "L#HV9v2a#+Schlawj-a%gdbCfAjy",
 			thumbHash: "df070a459a7276777085886798778877808307f787",
@@ -230,7 +228,7 @@ func TestSmallFirstFrame(t *testing.T) {
 }
 
 func TestSmallErrors(t *testing.T) {
-	data := testimage.EncodeJPEG(t, testimage.Gradient(300, 200))
+	data := testimage.GradientJPEG(t, 300, 200)
 
 	cases := map[string][]byte{
 		"zero-pixel frame": testimage.GIFZeroFrame(),
@@ -284,15 +282,4 @@ func opaqueBounds(img *image.RGBA) image.Rectangle {
 	}
 
 	return r
-}
-
-func encodeGIF(t *testing.T, img image.Image) []byte {
-	t.Helper()
-
-	var buf bytes.Buffer
-	if err := gif.Encode(&buf, img, nil); err != nil {
-		t.Fatal(err)
-	}
-
-	return buf.Bytes()
 }

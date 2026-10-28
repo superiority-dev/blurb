@@ -3,7 +3,6 @@ package header
 import (
 	"bytes"
 	"encoding/binary"
-	"hash/crc32"
 	"image"
 	"image/color"
 	"slices"
@@ -17,14 +16,21 @@ import (
 // and a tRNS chunk, which a walk that ends early also reports.
 func TestScanPNG(t *testing.T) {
 	plain := testimage.EncodePNG(t, testimage.Gradient(40, 30))
-	exif := pngChunk("eXIf", exifData(6, binary.BigEndian))
-	trns := pngChunk("tRNS", []byte{0, 0, 0, 0, 0, 0})
-	text := pngChunk("tEXt", []byte("Comment\x00hello"))
+	exif := testimage.PNGChunk("eXIf", testimage.EXIFOrientation(6, binary.BigEndian))
+	trns := testimage.PNGChunk("tRNS", []byte{0, 0, 0, 0, 0, 0})
+	text := testimage.PNGChunk("tEXt", []byte("Comment\x00hello"))
 
 	badCRC := slices.Clone(exif)
 	badCRC[len(badCRC)-1] ^= 1
 
-	noTIFF := pngChunk("eXIf", append([]byte("Exif\x00\x00"), exifData(6, binary.BigEndian)...))
+	noTIFF := testimage.PNGChunk(
+		"eXIf",
+		append([]byte("Exif\x00\x00"), testimage.EXIFOrientation(6, binary.BigEndian)...),
+	)
+
+	afterIHDR := func(chunks ...[]byte) []byte {
+		return testimage.PNGWithChunks(plain, testimage.PNGIHDREnd, chunks...)
+	}
 
 	cases := []struct {
 		name        string
@@ -34,12 +40,12 @@ func TestScanPNG(t *testing.T) {
 	}{
 		{
 			name:        "eXIf after IHDR",
-			input:       pngWithChunks(plain, pngIHDREnd, exif),
+			input:       afterIHDR(exif),
 			orientation: OrientationRotate90,
 		},
 		{
 			name:        "eXIf after another chunk",
-			input:       pngWithChunks(plain, pngIHDREnd, text, exif),
+			input:       afterIHDR(text, exif),
 			orientation: OrientationRotate90,
 		},
 		{
@@ -49,83 +55,78 @@ func TestScanPNG(t *testing.T) {
 		},
 		{
 			name:        "eXIf after IDAT",
-			input:       pngWithChunks(plain, len(plain)-12, exif),
+			input:       testimage.PNGWithChunks(plain, len(plain)-12, exif),
 			orientation: OrientationNormal,
 		},
 		{
-			name: "a second eXIf",
-			input: pngWithChunks(
-				plain,
-				pngIHDREnd,
-				exif,
-				pngChunk("eXIf", exifData(3, binary.BigEndian)),
-			),
+			name:        "a second eXIf",
+			input:       afterIHDR(exif, testimage.PNGChunk("eXIf", testimage.EXIFOrientation(3, binary.BigEndian))),
 			orientation: OrientationRotate90,
 		},
 		{
 			name:        "CRC wrong",
-			input:       pngWithChunks(plain, pngIHDREnd, badCRC),
+			input:       afterIHDR(badCRC),
 			orientation: OrientationNormal,
 		},
 		{
 			name:        "CRC wrong, then a valid eXIf",
-			input:       pngWithChunks(plain, pngIHDREnd, badCRC, exif),
+			input:       afterIHDR(badCRC, exif),
 			orientation: OrientationRotate90,
 		},
 		{
 			name:        "JPEG's identifier first",
-			input:       pngWithChunks(plain, pngIHDREnd, noTIFF),
+			input:       afterIHDR(noTIFF),
 			orientation: OrientationNormal,
 		},
 		{
 			name:        "JPEG's identifier first, then a valid eXIf",
-			input:       pngWithChunks(plain, pngIHDREnd, noTIFF, exif),
+			input:       afterIHDR(noTIFF, exif),
 			orientation: OrientationRotate90,
 		},
 		{
 			name:        "a valid eXIf without orientation, then another",
-			input:       pngWithChunks(plain, pngIHDREnd, pngChunk("eXIf", exifMakeOnly()), exif),
+			input:       afterIHDR(testimage.PNGChunk("eXIf", testimage.EXIFMakeOnly()), exif),
 			orientation: OrientationNormal,
 		},
 		{
 			name:        "tRNS",
-			input:       pngWithChunks(plain, pngIHDREnd, trns),
+			input:       afterIHDR(trns),
 			orientation: OrientationNormal,
 			transparent: true,
 		},
 		{
 			name:        "tRNS after eXIf",
-			input:       pngWithChunks(plain, pngIHDREnd, exif, trns),
+			input:       afterIHDR(exif, trns),
 			orientation: OrientationRotate90,
 			transparent: true,
 		},
 		{
 			name:        "cut before IDAT",
-			input:       plain[:pngIHDREnd],
+			input:       plain[:testimage.PNGIHDREnd],
 			orientation: OrientationNormal,
 			transparent: true,
 		},
 		{
 			name:        "length 4 GiB, no data",
-			input:       pngWithChunks(plain, pngIHDREnd, []byte{0xff, 0xff, 0xff, 0xff, 'e', 'X', 'I', 'f'}),
+			input:       afterIHDR([]byte{0xff, 0xff, 0xff, 0xff, 'e', 'X', 'I', 'f'}),
 			orientation: OrientationNormal,
 			transparent: true,
 		},
 		{
 			name:        "cut inside eXIf",
-			input:       pngWithChunks(plain, pngIHDREnd, exif)[:pngIHDREnd+8+4],
+			input:       afterIHDR(exif)[:testimage.PNGIHDREnd+8+4],
 			orientation: OrientationNormal,
 			transparent: true,
 		},
 		{
 			name:        "cut inside the CRC",
-			input:       pngWithChunks(plain, pngIHDREnd, exif)[:pngIHDREnd+len(exif)-2],
+			input:       afterIHDR(exif)[:testimage.PNGIHDREnd+len(exif)-2],
 			orientation: OrientationNormal,
 			transparent: true,
 		},
 		{
 			name:        "eXIf, then cut inside the next chunk",
-			input:       pngWithChunks(plain, pngIHDREnd, exif, text)[:pngIHDREnd+len(exif)+8+2],
+			input:       afterIHDR(exif, text)[:testimage.PNGIHDREnd+len(exif)+8+2],
 			orientation: OrientationRotate90,
 			transparent: true,
 		},
@@ -170,32 +171,4 @@ func TestPNGDecodeBytes(t *testing.T) {
 			t.Errorf("%s: %d, want %d", tc.name, got, want)
 		}
 	}
-}
-
-// pngIHDREnd is where a PNG file's IHDR chunk ends: the signature, the chunk's
-// length and type, its 13 bytes of data and its CRC.
-const pngIHDREnd = 8 + 8 + 13 + 4
-
-// pngChunk is one PNG chunk with its CRC.
-func pngChunk(kind string, data []byte) []byte {
-	chunk := binary.BigEndian.AppendUint32(nil, uint32(len(data)))
-	chunk = append(chunk, kind...)
-	chunk = append(chunk, data...)
-
-	return binary.BigEndian.AppendUint32(chunk, crc32.ChecksumIEEE(chunk[4:]))
-}
-
-// pngWithChunks puts chunks into a PNG file at offset at.
-func pngWithChunks(data []byte, at int, chunks ...[]byte) []byte {
-	return slices.Insert(slices.Clone(data), at, slices.Concat(chunks...)...)
-}
-
-// pngWithIHDR is PNG data with its IHDR chunk's data from offset at replaced by
-// field, and the chunk's CRC recomputed.
-func pngWithIHDR(data []byte, at int, field ...byte) []byte {
-	out := slices.Clone(data)
-	copy(out[8+8+at:], field)
-	binary.BigEndian.PutUint32(out[8+8+13:], crc32.ChecksumIEEE(out[8+4:8+8+13]))
-
-	return out
 }

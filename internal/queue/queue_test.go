@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-// TestNew requires [New] to refuse a concurrency not more than zero and a
+// TestNew requires [New] to refuse a concurrency that is not positive and a
 // negative [Options.MaxWaitingRequests], [Options.Timeout] or
 // [Options.MaxMemoryBytes], and to accept zero for those three.
 func TestNew(t *testing.T) {
@@ -136,7 +136,7 @@ func TestAcquireBytes(t *testing.T) {
 }
 
 // TestAcquireTooLarge requires a request larger than the whole
-// [Options.MaxMemoryBytes] to be refused at once rather than wait.
+// [Options.MaxMemoryBytes] to be refused at once, without waiting.
 func TestAcquireTooLarge(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
@@ -235,8 +235,8 @@ func TestAcquireNoWaiting(t *testing.T) {
 	})
 }
 
-// TestAcquireTimeout requires a waiter to give up with
-// [ErrTimeout] when its wait reaches the timeout, and to leave the queue.
+// TestAcquireTimeout requires a waiter to give up with [ErrTimeout] when its
+// wait reaches the timeout, and to leave the queue.
 func TestAcquireTimeout(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)

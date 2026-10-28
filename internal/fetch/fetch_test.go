@@ -5,23 +5,19 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
+	"testing/iotest"
 	"time"
 )
 
-const (
-	testHost     = "127.0.0.1"
-	testTimeout  = 5 * time.Second
-	testMaxBytes = 1 << 20 // 1 MiB
-)
-
-// TestNew requires [New] to refuse a timeout or maxBytes that is not more
-// than zero.
+// TestNew requires [New] to refuse a timeout or maxBytes that is not positive.
 func TestNew(t *testing.T) {
 	cases := []struct {
 		timeout  time.Duration
@@ -79,7 +75,7 @@ func TestFetchRefusesBeforeSending(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		if _, err := fetcher.Fetch(context.Background(), tc.rawURL); !errors.Is(err, tc.want) {
+		if _, _, err := fetcher.Fetch(context.Background(), tc.rawURL); !errors.Is(err, tc.want) {
 			t.Errorf("%s: got %v, want %v", tc.rawURL, err, tc.want)
 		}
 	}
@@ -96,7 +92,7 @@ func TestFetchPrivateAddress(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := fetcher.Fetch(context.Background(), srv.URL+"/a.jpg"); !errors.Is(err, ErrAddressNotAllowed) {
+	if _, _, err := fetcher.Fetch(context.Background(), srv.URL+"/a.jpg"); !errors.Is(err, ErrAddressNotAllowed) {
 		t.Errorf("got %v, want ErrAddressNotAllowed", err)
 	}
 }
@@ -153,14 +149,14 @@ func TestFetchRedirects(t *testing.T) {
 	}
 
 	for path, want := range refused {
-		if _, err := follow.Fetch(context.Background(), srv.URL+path); !errors.Is(err, want) {
+		if _, _, err := follow.Fetch(context.Background(), srv.URL+path); !errors.Is(err, want) {
 			t.Errorf("%s: got %v, want %v", path, err, want)
 		}
 	}
 
 	var se *OriginStatusError
 
-	_, err := newFetcher(t, testTimeout, testMaxBytes, Options{}).Fetch(context.Background(), srv.URL+"/to-image")
+	_, _, err := newFetcher(t, testTimeout, testMaxBytes, Options{}).Fetch(context.Background(), srv.URL+"/to-image")
 	if !errors.As(err, &se) || se.Status != http.StatusFound {
 		t.Errorf("not following: got %v, want an OriginStatusError with 302", err)
 	}
@@ -180,25 +176,14 @@ func TestFetchHeaderLimit(t *testing.T) {
 	fetcher := newFetcher(t, testTimeout, testMaxBytes, Options{})
 	fetchAll(t, fetcher, srv.URL+"/pad/"+strconv.Itoa(under))
 
-	if _, err := fetcher.Fetch(context.Background(), srv.URL+"/pad/"+strconv.Itoa(over)); err == nil {
+	if _, _, err := fetcher.Fetch(context.Background(), srv.URL+"/pad/"+strconv.Itoa(over)); err == nil {
 		t.Error("65 KiB of response headers accepted")
 	}
 }
 
-func TestFetchOriginStatusError(t *testing.T) {
-	srv := httptest.NewServer(http.NotFoundHandler())
-	defer srv.Close()
-
-	var se *OriginStatusError
-
-	_, err := newFetcher(t, testTimeout, testMaxBytes, Options{}).Fetch(context.Background(), srv.URL+"/missing.jpg")
-	if !errors.As(err, &se) || se.Status != http.StatusNotFound {
-		t.Errorf("got %v, want an OriginStatusError with 404", err)
-	}
-}
-
-// TestFetchMaxBytes requires an image larger than maxBytes to fail by its
-// Content-Length and, without one, while the body is read.
+// TestFetchMaxBytes requires an image larger than maxBytes to fail, by its
+// Content-Length when it declares one and while the body is read otherwise,
+// and the declared length to be the Content-Length, or -1 without one.
 func TestFetchMaxBytes(t *testing.T) {
 	const size = 100
 
@@ -219,27 +204,35 @@ func TestFetchMaxBytes(t *testing.T) {
 	defer srv.Close()
 
 	exact := newFetcher(t, testTimeout, size, Options{})
-	if got := fetchAll(t, exact, srv.URL+"/sized"); len(got) != size {
-		t.Errorf("read %d bytes at maxBytes, want %d", len(got), size)
+
+	sized, declared, err := exact.Fetch(context.Background(), srv.URL+"/sized")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sized.Close()
+
+	if n, err := io.Copy(io.Discard, sized); err != nil || n != size || declared != size {
+		t.Errorf("at maxBytes: %d bytes, %v, declared %d; want %d, nil and %d", n, err, declared, size, size)
 	}
 
 	small := newFetcher(t, testTimeout, size-1, Options{})
 	var tooLarge *http.MaxBytesError
 
-	if _, err := small.Fetch(context.Background(), srv.URL+"/sized"); !errors.As(err, &tooLarge) ||
+	if _, _, err := small.Fetch(context.Background(), srv.URL+"/sized"); !errors.As(err, &tooLarge) ||
 		tooLarge.Limit != size-1 {
 		t.Errorf("by Content-Length: got %v, want an *http.MaxBytesError with limit %d", err, size-1)
 	}
 
-	body, err := small.Fetch(context.Background(), srv.URL+"/chunked")
+	chunked, declared, err := small.Fetch(context.Background(), srv.URL+"/chunked")
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer body.Close()
+	defer chunked.Close()
 
-	n, err := io.Copy(io.Discard, body)
-	if !errors.As(err, &tooLarge) || tooLarge.Limit != size-1 || n != size-1 {
-		t.Errorf("while reading: %d bytes, %v; want %d and an *http.MaxBytesError", n, err, size-1)
+	n, err := io.Copy(io.Discard, chunked)
+	if !errors.As(err, &tooLarge) || tooLarge.Limit != size-1 || n != size-1 || declared != -1 {
+		t.Errorf("while reading: %d bytes, %v, declared %d; want %d, an *http.MaxBytesError and -1",
+			n, err, declared, size-1)
 	}
 }
 
@@ -283,10 +276,10 @@ func TestFetchTimeout(t *testing.T) {
 			errc := make(chan error, 1)
 
 			go func() {
-				body, err := tc.fetcher.Fetch(ctx, srv.URL+tc.path)
+				image, _, err := tc.fetcher.Fetch(ctx, srv.URL+tc.path)
 				if err == nil {
-					_, err = io.ReadAll(body)
-					body.Close()
+					_, err = io.ReadAll(image)
+					image.Close()
 				}
 				errc <- err
 			}()
@@ -298,6 +291,93 @@ func TestFetchTimeout(t *testing.T) {
 				}
 			case <-time.After(5 * time.Second):
 				t.Fatal("still running after 5s: nothing ends the fetch")
+			}
+		})
+	}
+}
+
+// TestFetchBodyErrors requires a body that ends before its Content-Length to
+// fail with [ErrOriginCut], and one with broken chunked encoding with
+// [ErrOriginMalformed].
+func TestFetchBodyErrors(t *testing.T) {
+	cases := []struct {
+		name     string
+		response string
+		want     error
+	}{
+		{
+			name:     "cut",
+			response: "HTTP/1.1 200 OK\r\nContent-Length: 10\r\n\r\nabc",
+			want:     ErrOriginCut,
+		},
+		{
+			name:     "bad chunk size",
+			response: "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n3\r\nabc\r\nzz\r\n",
+			want:     ErrOriginMalformed,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				conn, rw, err := w.(http.Hijacker).Hijack()
+				if err != nil {
+					t.Error(err)
+					return
+				}
+
+				fmt.Fprint(rw, tc.response)
+
+				if err := errors.Join(rw.Flush(), conn.Close()); err != nil {
+					t.Error(err)
+				}
+			}))
+			defer srv.Close()
+
+			fetcher := newFetcher(t, testTimeout, testMaxBytes, Options{})
+
+			image, _, err := fetcher.Fetch(context.Background(), srv.URL+"/a.jpg")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer image.Close()
+
+			if _, err := io.ReadAll(image); !errors.Is(err, tc.want) {
+				t.Errorf("got %v, want %v", err, tc.want)
+			}
+		})
+	}
+}
+
+// TestBodyRead requires a read error to also match [ErrOriginCut] when the
+// body ended early and [ErrOriginMalformed] otherwise, except a network error,
+// a cancellation, a passed deadline or an [*http.MaxBytesError], which match
+// neither.
+func TestBodyRead(t *testing.T) {
+	cases := []struct {
+		name  string
+		err   error
+		class error
+	}{
+		{name: "cut", err: io.ErrUnexpectedEOF, class: ErrOriginCut},
+		{name: "framing", err: errors.New("invalid byte in chunk length"), class: ErrOriginMalformed},
+		{name: "network", err: &net.OpError{Op: "read", Net: "tcp", Err: syscall.ECONNRESET}},
+		{name: "canceled", err: context.Canceled},
+		{name: "deadline", err: context.DeadlineExceeded},
+		{name: "too large", err: &http.MaxBytesError{Limit: testMaxBytes}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := (&body{r: io.NopCloser(iotest.ErrReader(tc.err))}).Read(make([]byte, 1))
+			if !errors.Is(err, tc.err) {
+				t.Fatalf("got %v, want it to wrap %v", err, tc.err)
+			}
+
+			for _, class := range []error{ErrOriginCut, ErrOriginMalformed} {
+				if want := class == tc.class; errors.Is(err, class) != want {
+					t.Errorf("got %v; matching %v is %t, want %t", err, class, !want, want)
+				}
 			}
 		})
 	}
@@ -328,6 +408,12 @@ func TestFetchable(t *testing.T) {
 	}
 }
 
+const (
+	testHost     = "127.0.0.1"
+	testTimeout  = 5 * time.Second
+	testMaxBytes = 1 << 20 // 1 MiB
+)
+
 // newFetcher returns [New]'s [Fetcher] and fails t on an error. It allows
 // private addresses, and testHost when opts names no hosts.
 func newFetcher(t *testing.T, timeout time.Duration, maxBytes int64, opts Options) *Fetcher {
@@ -350,13 +436,13 @@ func newFetcher(t *testing.T, timeout time.Duration, maxBytes int64, opts Option
 func fetchAll(t *testing.T, fetcher *Fetcher, rawURL string) string {
 	t.Helper()
 
-	body, err := fetcher.Fetch(context.Background(), rawURL)
+	image, _, err := fetcher.Fetch(context.Background(), rawURL)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer body.Close()
+	defer image.Close()
 
-	got, err := io.ReadAll(body)
+	got, err := io.ReadAll(image)
 	if err != nil {
 		t.Fatal(err)
 	}

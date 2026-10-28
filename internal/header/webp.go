@@ -126,11 +126,10 @@ type webpImage struct {
 	start, length int64
 }
 
-// webpSplice represents a WebP file whose start is replaced: head, then the
-// file's bytes from offset from.
+// webpSplice represents a WebP file whose start is replaced.
 type webpSplice struct {
-	head []byte
-	from int64
+	head []byte // replaces the file's start
+	from int64  // offset the file's bytes resume from
 }
 
 // scanWebP walks the chunks of the WebP file r holds up to the image data
@@ -196,10 +195,10 @@ func scanWebP(r io.Reader) webpImage {
 	}
 }
 
-// webpDecodeBytes estimates the memory decoding a WebP of cfg's size and color
-// model holds, for its image img. An animation is charged for its first frame;
-// an unknown bitstream as lossy with alpha and the largest frame, more than a
-// lossless one.
+// webpDecodeBytes estimates the peak memory decoding a WebP needs, given cfg
+// and img. An animation whose first frame's bitstream is known counts as that
+// frame alone; an unknown bitstream counts as lossy with alpha at cfg's size,
+// with webpMaxFrame bytes of compressed data.
 func webpDecodeBytes(cfg image.Config, img webpImage) int64 {
 	alpha := cfg.ColorModel != color.YCbCrModel
 	if img.animated && img.kind != webpUnknown {

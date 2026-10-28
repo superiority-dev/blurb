@@ -39,7 +39,8 @@ type Options struct {
 	MaxMemoryBytes int64
 }
 
-// Queue admits requests in arrival order. It is safe for concurrent use.
+// Queue admits requests in arrival order. It is safe for concurrent use. A
+// Queue must be created with [New].
 type Queue struct {
 	mu                 sync.Mutex
 	slots              int
@@ -55,10 +56,10 @@ type waiter struct {
 	ready chan struct{}
 }
 
-// New returns a [Queue] that runs up to concurrency requests at once. It
-// returns an error when concurrency is not more than zero, or
-// [Options.MaxWaitingRequests], [Options.Timeout] or
-// [Options.MaxMemoryBytes] is negative.
+// New returns a [Queue] that lets up to concurrency requests run at once. It
+// returns an error when concurrency is not positive or when
+// [Options.MaxWaitingRequests], [Options.Timeout] or [Options.MaxMemoryBytes]
+// is negative.
 func New(concurrency int, opts Options) (*Queue, error) {
 	switch {
 	case concurrency <= 0:

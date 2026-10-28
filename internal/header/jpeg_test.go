@@ -5,20 +5,22 @@ import (
 	"image"
 	"slices"
 	"testing"
+
+	"github.com/superiority-dev/blurb/internal/testimage"
 )
 
 // TestScanJPEG requires scanJPEG to return the image's own frame header and
 // the orientation in the first EXIF segment, however the segments end.
 func TestScanJPEG(t *testing.T) {
-	decoy := append([]byte("Exif\x00\x00"), exifData(6, binary.LittleEndian)...)
-	decoy = append(decoy, jpegSegment(0xc0, []byte{8, 0, 1, 0, 1, 1, 1, 0x11, 0})...)
+	decoy := append([]byte("Exif\x00\x00"), testimage.EXIFOrientation(6, binary.LittleEndian)...)
+	decoy = append(decoy, testimage.JPEGSegment(0xc0, []byte{8, 0, 1, 0, 1, 1, 1, 0x11, 0})...)
 
 	// An APP1 segment whose identifier is not "Exif\x00\x00" is passed over,
 	// even with EXIF data after it.
-	notEXIF := append([]byte("EXIF\x00\x00"), exifData(3, binary.LittleEndian)...)
+	notEXIF := append([]byte("EXIF\x00\x00"), testimage.EXIFOrientation(3, binary.LittleEndian)...)
 
 	// Only the first EXIF segment counts.
-	second := append([]byte("Exif\x00\x00"), exifData(4, binary.LittleEndian)...)
+	second := append([]byte("Exif\x00\x00"), testimage.EXIFOrientation(4, binary.LittleEndian)...)
 
 	frame := func(marker byte, samplings ...byte) []byte {
 		payload := []byte{8, 0, 16, 0, 16, byte(len(samplings))}
@@ -26,7 +28,7 @@ func TestScanJPEG(t *testing.T) {
 			payload = append(payload, byte(i+1), sampling, 0)
 		}
 
-		return jpegSegment(marker, payload)
+		return testimage.JPEGSegment(marker, payload)
 	}
 
 	cases := []struct {
@@ -125,9 +127,9 @@ func TestScanJPEG(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			b := []byte{0xff, 0xd8}
-			b = append(b, jpegSegment(0xe1, notEXIF)...)
-			b = append(b, jpegSegment(0xe1, decoy)...)
-			b = append(b, jpegSegment(0xe1, second)...)
+			b = append(b, testimage.JPEGSegment(0xe1, notEXIF)...)
+			b = append(b, testimage.JPEGSegment(0xe1, decoy)...)
+			b = append(b, testimage.JPEGSegment(0xe1, second)...)
 			// Fill bytes before a marker, as per T.81 section B.1.1.2.
 			b = append(b, 0xff, 0xff)
 			b = append(b, tc.frame...)
@@ -267,45 +269,4 @@ func TestJPEGDecodeBytes(t *testing.T) {
 			t.Errorf("%s: %d, want %d", tc.name, got, want)
 		}
 	}
-}
-
-// jpegWithEXIF puts an EXIF segment carrying orientation after a JPEG's SOI.
-func jpegWithEXIF(data []byte, orientation uint16, order binary.ByteOrder) []byte {
-	out := append([]byte{}, data[:2]...)
-	out = append(out, jpegSegment(0xe1, append([]byte("Exif\x00\x00"), exifData(orientation, order)...))...)
-
-	return append(out, data[2:]...)
-}
-
-// jpegPadTo puts APP2 segments after a JPEG's SOI so that what
-// [image.DecodeConfig] reads ends at byte end. Without JFIF's APP0 segment,
-// which Go's encoder does not write, it reads up to the SOS segment's length.
-// A marker is 2 bytes and a segment's head, the marker and its length, 4.
-func jpegPadTo(data []byte, end int) []byte {
-	i := 2
-	for data[i+1] != 0xda {
-		i += 2 + int(binary.BigEndian.Uint16(data[i+2:]))
-	}
-
-	out := append([]byte{}, data[:2]...)
-
-	for pad := end - (i + 4); pad > 0; {
-		n := min(pad, 2+0xffff)
-		if rest := pad - n; rest > 0 && rest < 4 {
-			n -= 4
-		}
-
-		out = append(out, jpegSegment(0xe2, make([]byte, n-4))...)
-		pad -= n
-	}
-
-	return append(out, data[2:]...)
-}
-
-// jpegSegment is one JPEG marker segment.
-func jpegSegment(marker byte, payload []byte) []byte {
-	segment := []byte{0xff, marker, 0, 0}
-	binary.BigEndian.PutUint16(segment[2:], uint16(len(payload)+2))
-
-	return append(segment, payload...)
 }

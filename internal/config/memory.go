@@ -11,8 +11,8 @@ import (
 	"strings"
 )
 
-// noCgroupLimit is where cgroup v1 values stop being a limit: it reports
-// MaxInt64 rounded down to the page size when none is set.
+// noCgroupLimit is where cgroup v1 values stop being a limit: cgroup v1
+// reports MaxInt64 rounded down to the page size when none is set.
 const noCgroupLimit = 1 << 62
 
 // cgroupFields is the field count of a proc/self/cgroup line: the
@@ -24,8 +24,8 @@ const cgroupFields = 3
 const FromGOMEMLIMIT = "GOMEMLIMIT"
 
 // MemoryLimit returns the process's memory limit in bytes, 0 for none, and
-// where it came from: [FromGOMEMLIMIT], otherwise the file of the smallest
-// memory limit set on the process's cgroup or any cgroup above it.
+// where it came from: [FromGOMEMLIMIT], the file of the smallest memory
+// limit set on the process's cgroup or any cgroup above it, or "none".
 func MemoryLimit() (limit int64, source string) {
 	if runtimeLimit := debug.SetMemoryLimit(-1); runtimeLimit != math.MaxInt64 {
 		return runtimeLimit, FromGOMEMLIMIT
@@ -38,10 +38,10 @@ func MemoryLimit() (limit int64, source string) {
 	return 0, "none"
 }
 
-// cgroupMemoryLimit finds the process's cgroup in proc/self/cgroup of fsys,
-// a file system rooted at /, and returns the smallest memory limit on the
-// way from that cgroup up to the root, and the file it came from.
-func cgroupMemoryLimit(fsys fs.FS) (int64, string, bool) {
+// cgroupMemoryLimit returns the smallest memory limit set on the process's
+// cgroup or any cgroup above it, and the file it came from. fsys is a file
+// system rooted at /. The ok result reports whether any limit is set.
+func cgroupMemoryLimit(fsys fs.FS) (limit int64, source string, ok bool) {
 	b, err := fs.ReadFile(fsys, "proc/self/cgroup")
 	if err != nil {
 		return 0, "", false
@@ -64,39 +64,36 @@ func cgroupMemoryLimit(fsys fs.FS) (int64, string, bool) {
 			continue
 		}
 
-		if limit, src, ok := smallestLimit(fsys, dir, fields[2], file); ok {
-			return limit, src, true
+		if limit, source, ok = smallestLimit(fsys, dir, fields[2], file); ok {
+			return limit, source, true
 		}
 	}
 
 	return 0, "", false
 }
 
-// smallestLimit reads file in the cgroup directory for group under dir and
-// in every parent up to dir itself, and returns the smallest limit set.
-func smallestLimit(fsys fs.FS, dir, group, file string) (int64, string, bool) {
-	var (
-		best int64
-		src  string
-	)
-
+// smallestLimit returns the smallest limit in file across dir/group and each
+// parent up to dir, and the file it came from. The ok result reports whether
+// any limit is set.
+func smallestLimit(fsys fs.FS, dir, group, file string) (limit int64, source string, ok bool) {
 	for cgroup := path.Clean("/" + group); ; cgroup = path.Dir(cgroup) {
 		name := path.Join(dir, cgroup, file)
 
 		if b, err := fs.ReadFile(fsys, name); err == nil {
-			if limit, ok := parseCgroupLimit(string(b)); ok && (best == 0 || limit < best) {
-				best, src = limit, "/"+name
+			if n, set := parseCgroupLimit(string(b)); set && (limit == 0 || n < limit) {
+				limit, source = n, "/"+name
 			}
 		}
 
 		if cgroup == "/" {
-			return best, src, best > 0
+			return limit, source, limit > 0
 		}
 	}
 }
 
-// parseCgroupLimit reads a cgroup memory limit file. "max", and the near
-// maximum value cgroup v1 reports for no limit, mean none.
+// parseCgroupLimit parses s, the contents of a cgroup memory limit file.
+// "max", and the near-maximum value cgroup v1 reports for no limit, mean
+// none.
 func parseCgroupLimit(s string) (int64, bool) {
 	n, err := strconv.ParseInt(strings.TrimSpace(s), 10, 64)
 	if err != nil || n <= 0 || n >= noCgroupLimit {

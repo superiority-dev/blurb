@@ -3,12 +3,13 @@ SHELL := /bin/bash
 
 GOLANGCI_LINT ?= go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.15.0
 GOVULNCHECK   ?= go run golang.org/x/vuln/cmd/govulncheck@v1.9.0
+ACTIONLINT    ?= go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
 
 RACE ?= 1
 
-.PHONY: check fmt vet lint test vuln fma
+.PHONY: check fmt vet lint test vuln fma lint-ci
 
-check: fmt vet lint test vuln fma
+check: fmt vet lint lint-ci test vuln fma
 
 fmt:
 	@files=$$(go list -f '{{$$d:=.Dir}}{{range .GoFiles}}{{$$d}}/{{.}}{{"\n"}}{{end}}{{range .TestGoFiles}}{{$$d}}/{{.}}{{"\n"}}{{end}}{{range .XTestGoFiles}}{{$$d}}/{{.}}{{"\n"}}{{end}}{{range .IgnoredGoFiles}}{{$$d}}/{{.}}{{"\n"}}{{end}}' ./...); \
@@ -31,6 +32,9 @@ endif
 
 vuln:
 	$(GOVULNCHECK) ./...
+
+lint-ci:
+	$(ACTIONLINT) .github/workflows/*.yml
 
 fma:
 	@dir=$$(mktemp -d); trap 'rm -rf "$$dir"' EXIT; \

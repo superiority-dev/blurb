@@ -19,8 +19,7 @@ import (
 	_ "golang.org/x/image/webp"
 )
 
-// maxBytes is the most of the input [Read] reads.
-const maxBytes = 1 << 20 // 1 MiB
+const maxHeaderBytes = 1 << 20 // 1 MiB
 
 var (
 	// ErrUnsupportedFormat is returned for input whose format no registered
@@ -135,7 +134,7 @@ func Read(r io.Reader) (info Info, rest io.Reader, err error) {
 	var buf bytes.Buffer
 
 	src := &readers.Sticky{R: r}
-	in := io.TeeReader(io.LimitReader(src, maxBytes), &buf)
+	in := io.TeeReader(io.LimitReader(src, maxHeaderBytes), &buf)
 
 	var splice *webpSplice
 
@@ -173,7 +172,7 @@ func configError(err error, format Format, n int) error {
 		return &UnsupportedFeatureError{Format: format, Feature: feature}
 	case errors.Is(err, image.ErrFormat):
 		return ErrUnsupportedFormat
-	case n >= maxBytes:
+	case n >= maxHeaderBytes:
 		return ErrTooLarge
 	default:
 		return fmt.Errorf("%w: %w", ErrUnreadable, err)

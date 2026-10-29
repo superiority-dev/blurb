@@ -5,7 +5,7 @@ import (
 	"math"
 	"net/url"
 	"reflect"
-	"runtime/debug"
+	"strconv"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -308,13 +308,38 @@ func TestDecodeLimits(t *testing.T) {
 	}
 }
 
-// TestMemoryLimit requires a limit set as GOMEMLIMIT sets it to be reported
-// with the source "GOMEMLIMIT".
+// TestMemoryLimit requires the smaller of GOMEMLIMIT and the cgroup limit,
+// GOMEMLIMIT on a tie, each named by its source.
 func TestMemoryLimit(t *testing.T) {
-	defer debug.SetMemoryLimit(debug.SetMemoryLimit(1 << 30))
+	cases := []struct {
+		gomemlimit int64
+		cgroup     int64 // 0 for no cgroup files
+		want       int64
+		wantSrc    string
+	}{
+		{gomemlimit: math.MaxInt64, cgroup: 2147483648, want: 2147483648, wantSrc: "/sys/fs/cgroup/pod/memory.max"},
+		{gomemlimit: 1 << 40, cgroup: 2147483648, want: 2147483648, wantSrc: "/sys/fs/cgroup/pod/memory.max"},
+		{gomemlimit: 2147483648, cgroup: 2147483648, want: 2147483648, wantSrc: "GOMEMLIMIT"},
+		{gomemlimit: 1 << 30, cgroup: 2147483648, want: 1 << 30, wantSrc: "GOMEMLIMIT"},
+		{gomemlimit: 1 << 30, want: 1 << 30, wantSrc: "GOMEMLIMIT"},
+		{gomemlimit: math.MaxInt64, want: 0, wantSrc: "none"},
+	}
 
-	if limit, source := MemoryLimit(); limit != 1<<30 || source != "GOMEMLIMIT" {
-		t.Errorf("got %d from %q, want %d from GOMEMLIMIT", limit, source, 1<<30)
+	for _, tc := range cases {
+		fsys := fstest.MapFS{}
+		cgroupDesc := "no cgroup"
+		if tc.cgroup != 0 {
+			fsys["proc/self/cgroup"] = &fstest.MapFile{Data: []byte("0::/pod\n")}
+			fsys["sys/fs/cgroup/pod/memory.max"] = &fstest.MapFile{Data: strconv.AppendInt(nil, tc.cgroup, 10)}
+			cgroupDesc = "a cgroup limit of " + strconv.FormatInt(tc.cgroup, 10)
+		}
+
+		if got, src := memoryLimit(tc.gomemlimit, fsys); got != tc.want || src != tc.wantSrc {
+			t.Errorf(
+				"memoryLimit(%d) with %s = %d from %q, want %d from %q",
+				tc.gomemlimit, cgroupDesc, got, src, tc.want, tc.wantSrc,
+			)
+		}
 	}
 }
 

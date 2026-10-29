@@ -23,19 +23,26 @@ const cgroupFields = 3
 // limit.
 const FromGOMEMLIMIT = "GOMEMLIMIT"
 
-// MemoryLimit returns the process's memory limit in bytes, 0 for none, and
-// where it came from: [FromGOMEMLIMIT], the file of the smallest memory
-// limit set on the process's cgroup or any cgroup above it, or "none".
+// MemoryLimit returns the smaller of GOMEMLIMIT and the process's cgroup
+// memory limit, in bytes, 0 for none, and where it came from:
+// [FromGOMEMLIMIT], the cgroup file, or "none".
 func MemoryLimit() (limit int64, source string) {
-	if runtimeLimit := debug.SetMemoryLimit(-1); runtimeLimit != math.MaxInt64 {
-		return runtimeLimit, FromGOMEMLIMIT
-	}
+	return memoryLimit(debug.SetMemoryLimit(-1), os.DirFS("/"))
+}
 
-	if cgroupLimit, src, ok := cgroupMemoryLimit(os.DirFS("/")); ok {
-		return cgroupLimit, src
-	}
+// memoryLimit is [MemoryLimit] for a runtime limit of gomemlimit bytes. A
+// gomemlimit of math.MaxInt64 means none; fsys is a file system rooted at /.
+func memoryLimit(gomemlimit int64, fsys fs.FS) (limit int64, source string) {
+	cgroupLimit, cgroupSource, ok := cgroupMemoryLimit(fsys)
 
-	return 0, "none"
+	switch {
+	case gomemlimit != math.MaxInt64 && (!ok || gomemlimit <= cgroupLimit):
+		return gomemlimit, FromGOMEMLIMIT
+	case ok:
+		return cgroupLimit, cgroupSource
+	default:
+		return 0, "none"
+	}
 }
 
 // cgroupMemoryLimit returns the smallest memory limit set on the process's

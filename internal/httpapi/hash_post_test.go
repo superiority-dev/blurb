@@ -13,6 +13,7 @@ import (
 	"image"
 	"image/color/palette"
 	"io"
+	"log/slog"
 	"math/rand/v2"
 	"net"
 	"net/http"
@@ -262,7 +263,10 @@ func TestHashPostReset(t *testing.T) {
 
 	srv.Close()
 
-	checkLog(t, logs, map[string]any{"status": float64(http.StatusServiceUnavailable), "level": "INFO"})
+	checkLog(t, logs, map[string]any{
+		"status":      float64(http.StatusServiceUnavailable),
+		slog.LevelKey: slog.LevelInfo.String(),
+	})
 }
 
 // TestHashPostBodyErrors requires a body that ends before its declared length,

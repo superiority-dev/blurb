@@ -3,6 +3,7 @@ package httpapi
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -30,7 +31,8 @@ func TestNewHandler(t *testing.T) {
 		checkRoute(t, h, rt)
 	}
 
-	if n, want := strings.Count(logs.String(), `"msg":"request"`), len(apiRoutes); n != want {
+	requestMsg := fmt.Sprintf("%q:%q", slog.MessageKey, "request")
+	if n, want := strings.Count(logs.String(), requestMsg), len(apiRoutes); n != want {
 		t.Errorf(`%d "request" log lines, want %d`, n, want)
 	}
 }

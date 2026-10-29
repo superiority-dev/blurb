@@ -8,8 +8,7 @@ import (
 	"slices"
 )
 
-// dominantCount is the most colors [Dominant] returns.
-const dominantCount = 5
+const maxDominantColors = 5
 
 // binBits is the bits of red, green and blue that sort a pixel into a bin.
 const binBits = 4
@@ -84,7 +83,7 @@ func Dominant(img *image.RGBA) []Swatch {
 	}
 
 	slices.SortStableFunc(order, func(a, b int) int { return cmp.Compare(bins[b].n, bins[a].n) })
-	order = order[:min(len(order), dominantCount)]
+	order = order[:min(len(order), maxDominantColors)]
 
 	out := make([]Swatch, 0, len(order))
 

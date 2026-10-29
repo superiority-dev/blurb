@@ -66,11 +66,11 @@ func TestLogRequests(t *testing.T) {
 	h.ServeHTTP(httptest.NewRecorder(), req)
 
 	lines := checkLog(t, logs, map[string]any{
-		"msg":        "request",
-		"method":     "DELETE",
-		"route":      "/hash",
-		"status":     float64(http.StatusMethodNotAllowed),
-		"request_id": "req-1",
+		slog.MessageKey: "request",
+		"method":        http.MethodDelete,
+		"route":         "/hash",
+		"status":        float64(http.StatusMethodNotAllowed),
+		"request_id":    "req-1",
 	})
 
 	if lines[0]["took"] == nil {
@@ -84,19 +84,19 @@ func TestLogRequests(t *testing.T) {
 func TestLogRequestsLevels(t *testing.T) {
 	cases := []struct {
 		err   error
-		level string
+		level slog.Level
 		cause any
 	}{
-		{err: errors.New("boom"), level: "ERROR", cause: "boom"},
+		{err: errors.New("boom"), level: slog.LevelError, cause: "boom"},
 		{
 			err:   &fetch.OriginStatusError{Status: http.StatusInternalServerError},
-			level: "WARN",
+			level: slog.LevelWarn,
 			cause: "fetch: origin answered 500",
 		},
-		{err: context.DeadlineExceeded, level: "WARN", cause: context.DeadlineExceeded.Error()},
-		{err: queue.ErrBusy, level: "INFO", cause: queue.ErrBusy.Error()},
-		{err: queue.ErrTimeout, level: "INFO", cause: queue.ErrTimeout.Error()},
-		{err: &fetch.OriginStatusError{Status: http.StatusNotFound}, level: "INFO", cause: nil},
+		{err: context.DeadlineExceeded, level: slog.LevelWarn, cause: context.DeadlineExceeded.Error()},
+		{err: queue.ErrBusy, level: slog.LevelInfo, cause: queue.ErrBusy.Error()},
+		{err: queue.ErrTimeout, level: slog.LevelInfo, cause: queue.ErrTimeout.Error()},
+		{err: &fetch.OriginStatusError{Status: http.StatusNotFound}, level: slog.LevelInfo, cause: nil},
 	}
 
 	for _, tc := range cases {
@@ -106,7 +106,11 @@ func TestLogRequestsLevels(t *testing.T) {
 		}))
 		h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/hash", nil))
 
-		checkLog(t, logs, map[string]any{"msg": "request", "level": tc.level, "error": tc.cause})
+		checkLog(t, logs, map[string]any{
+			slog.MessageKey: "request",
+			slog.LevelKey:   tc.level.String(),
+			"error":         tc.cause,
+		})
 	}
 }
 
@@ -134,8 +138,12 @@ func TestRecoverPanicsLogged(t *testing.T) {
 	}
 
 	checkLog(t, logs,
-		map[string]any{"msg": "panic", "value": "boom", "request_id": "req-7"},
-		map[string]any{"msg": "request", "status": float64(http.StatusInternalServerError), "request_id": "req-7"},
+		map[string]any{slog.MessageKey: "panic", "value": "boom", "request_id": "req-7"},
+		map[string]any{
+			slog.MessageKey: "request",
+			"status":        float64(http.StatusInternalServerError),
+			"request_id":    "req-7",
+		},
 	)
 }
 
@@ -180,8 +188,12 @@ func TestRecoverPanicsWritten(t *testing.T) {
 				}
 
 				checkLog(t, logs,
-					map[string]any{"msg": "panic"},
-					map[string]any{"msg": "request", "level": "ERROR", "error": "response aborted"},
+					map[string]any{slog.MessageKey: "panic"},
+					map[string]any{
+						slog.MessageKey: "request",
+						slog.LevelKey:   slog.LevelError.String(),
+						"error":         "response aborted",
+					},
 				)
 			}()
 

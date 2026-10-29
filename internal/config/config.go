@@ -9,14 +9,13 @@ import (
 	"time"
 )
 
-// year is the default MAX_AGE and the longest allowed.
-const year = 365 * 24 * time.Hour
+const defaultMaxAge = 365 * 24 * time.Hour
 
 const (
 	maxPixelsLimit            = 1_000_000_000 // MAX_MEGAPIXELS, in pixels
 	maxConcurrentDecodesLimit = 4096          // MAX_CONCURRENT_DECODES
 	maxWaitingRequestsLimit   = 1 << 16       // MAX_WAITING_REQUESTS, 65536
-	maxAgeLimit               = year          // MAX_AGE
+	maxAgeLimit               = defaultMaxAge // MAX_AGE
 	maxBytesLimit             = 1 << 62       // MAX_DOWNLOAD_BYTES, 4 EiB
 	maxComponents             = 9             // each axis of BLURHASH_COMPONENTS
 )
@@ -95,7 +94,7 @@ func Load(lookup func(string) (string, bool)) (Config, error) {
 	cfg := Config{
 		Addr:                  env.str("ADDR", ":8080"),
 		PathPrefix:            env.pathPrefix("PATH_PREFIX"),
-		MaxAge:                env.seconds("MAX_AGE", year, maxAgeLimit),
+		MaxAge:                env.seconds("MAX_AGE", defaultMaxAge, maxAgeLimit),
 		RequestIDHeader:       env.headerName("REQUEST_ID_HEADER", "X-Request-Id"),
 		AllowedHosts:          env.allowlist("ALLOWED_HOSTS"),
 		BaseURL:               env.url("BASE_URL"),

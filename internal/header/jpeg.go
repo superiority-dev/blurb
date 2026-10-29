@@ -209,8 +209,7 @@ func jpegSampling(seg []byte, i int) (h, v int) {
 }
 
 // jpegDecodeBytes estimates the memory decoding a JPEG of cfg's size holds,
-// from frame, its frame header; without one it assumes jpegUnknown bytes a
-// pixel.
+// from its frame header; with none it assumes jpegUnknown bytes a pixel.
 func jpegDecodeBytes(cfg image.Config, frame *jpegFrame) int64 {
 	if frame == nil {
 		return decodeBytes(cfg.Width, cfg.Height, jpegUnknown)

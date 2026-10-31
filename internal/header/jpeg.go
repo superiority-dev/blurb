@@ -3,7 +3,11 @@ package header
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
+	"fmt"
 	"image"
+	"image/color"
+	"io"
 )
 
 // jpegPrefix is the byte every JPEG marker follows.
@@ -11,9 +15,14 @@ const jpegPrefix = 0xff
 
 // JPEG markers, as per ITU-T T.81 table B.1.
 const (
+	jpegRST0  = 0xd0
+	jpegRST7  = 0xd7
 	jpegSOI   = 0xd8
+	jpegEOI   = 0xd9
 	jpegSOS   = 0xda
+	jpegAPP0  = 0xe0
 	jpegAPP1  = 0xe1
+	jpegAPP14 = 0xee
 	jpegSOF0  = 0xc0
 	jpegSOF2  = 0xc2
 	jpegSOF15 = 0xcf
@@ -75,9 +84,25 @@ const (
 	// subsampled.
 	jpegCMYKOutput = 4
 
+	// jpegRGBOutput is the bytes per pixel of the image an RGB JPEG is
+	// converted into, beside its stored samples.
+	jpegRGBOutput = 4
+
 	// jpegUnknown is used when the frame header was not found: four
 	// components, unsubsampled and progressive.
 	jpegUnknown = jpegCMYKComponents*jpegProgressiveFactor + jpegCMYKOutput
+)
+
+// jpegMaxScans is the most scans a JPEG may hold for its decode to go on.
+const jpegMaxScans = 32
+
+var (
+	errJPEGScans = fmt.Errorf("header: JPEG of more than %d scans", jpegMaxScans)
+
+	// errJPEGLateApp is for an APP0 or APP14 segment after the frame header,
+	// past where [image.DecodeConfig] may stop, which can change the color
+	// model the decoder converts to.
+	errJPEGLateApp = errors.New("header: JPEG with an APP0 or APP14 segment after its frame header")
 )
 
 // jpegEXIFIdentifier is the EXIF identifier code, which starts the payload of
@@ -98,6 +123,94 @@ type jpegFrame struct {
 	// mcuWidth and mcuHeight are the pixels one MCU covers; the decoder
 	// pads the image to whole MCUs.
 	mcuWidth, mcuHeight int
+}
+
+// jpegReader reads a JPEG from r, walking its segments by their lengths, and
+// fails with errJPEGScans at a scan past jpegMaxScans or with errJPEGLateApp.
+// It reads on unchecked past the EOI marker. Once it fails it must not be read
+// again, so [Read] wraps it in a readers.Sticky.
+type jpegReader struct {
+	r io.Reader
+
+	// scans counts the SOS markers read so far.
+	scans int
+
+	// frame reports whether a frame header's marker was read.
+	frame bool
+
+	// marker reports whether the last byte read was a 0xff outside a
+	// segment's payload.
+	marker bool
+
+	// length is a segment's length field, read for lengthLeft more bytes;
+	// skip is the bytes of its payload left.
+	length, lengthLeft, skip int
+
+	// end reports whether the EOI marker was read.
+	end bool
+}
+
+// Read reads from r, and where it fails, returns the bytes before the marker's
+// code with the error.
+func (j *jpegReader) Read(p []byte) (int, error) {
+	n, err := j.r.Read(p)
+	for i, b := range p[:n] {
+		if err := j.next(b); err != nil {
+			return i, err
+		}
+	}
+
+	return n, err
+}
+
+// next walks one byte. A marker is 0xff, any number of 0xff fill bytes and a
+// code, as per T.81 section B.1.1.2, and 0xff 0x00 is a stuffed byte in
+// entropy data. The format gives SOI, EOI, RSTn and TEM no length field; the
+// decoder reads one after every code but the first SOI, EOI and RSTn, and fails
+// at TEM and at a later SOI.
+func (j *jpegReader) next(b byte) error {
+	switch {
+	case j.end:
+	case j.skip > 0:
+		j.skip--
+	case j.lengthLeft > 0:
+		j.length, j.lengthLeft = j.length<<8|int(b), j.lengthLeft-1
+		if j.lengthLeft == 0 {
+			j.skip = max(0, j.length-jpegLengthLen)
+		}
+	case b == jpegPrefix:
+		j.marker = true
+	case j.marker:
+		j.marker = false
+		return j.segment(b)
+	}
+
+	return nil
+}
+
+// segment handles a marker's code and, for a code with a length field, starts
+// reading it.
+func (j *jpegReader) segment(code byte) error {
+	switch {
+	case code == 0, code == jpegSOI, code >= jpegRST0 && code <= jpegRST7:
+		return nil
+	case code == jpegEOI:
+		j.end = true
+		return nil
+	case code == jpegSOS:
+		j.scans++
+		if j.scans > jpegMaxScans {
+			return errJPEGScans
+		}
+	case jpegFrameMarker(code):
+		j.frame = true
+	case (code == jpegAPP0 || code == jpegAPP14) && j.frame:
+		return errJPEGLateApp
+	}
+
+	j.length, j.lengthLeft = 0, jpegLengthLen
+
+	return nil
 }
 
 // scanJPEG walks a JPEG's segments by their lengths up to the first scan, so
@@ -145,8 +258,7 @@ func scanJPEG(b []byte) (*jpegFrame, Orientation) {
 			if fromEXIF, ok := exifOrientation(seg[len(jpegEXIFIdentifier):]); ok {
 				orientation = fromEXIF
 			}
-		case marker >= jpegSOF0 && marker <= jpegSOF15 &&
-			marker != jpegDHT && marker != jpegJPG && marker != jpegDAC:
+		case jpegFrameMarker(marker):
 			frame = parseJPEGFrame(marker, seg)
 		}
 
@@ -154,6 +266,11 @@ func scanJPEG(b []byte) (*jpegFrame, Orientation) {
 	}
 
 	return frame, orientation
+}
+
+// jpegFrameMarker reports whether marker starts a frame header.
+func jpegFrameMarker(marker byte) bool {
+	return marker >= jpegSOF0 && marker <= jpegSOF15 && marker != jpegDHT && marker != jpegJPG && marker != jpegDAC
 }
 
 // parseJPEGFrame reads a frame header's component count and sampling factors.
@@ -208,8 +325,9 @@ func jpegSampling(seg []byte, i int) (h, v int) {
 	return int(hv >> jpegSamplingBits), int(hv & (1<<jpegSamplingBits - 1))
 }
 
-// jpegDecodeBytes estimates the memory decoding a JPEG of cfg's size holds,
-// from its frame header; with none it assumes jpegUnknown bytes a pixel.
+// jpegDecodeBytes estimates the memory decoding a JPEG of cfg's size and color
+// model holds, from its frame header; with none it assumes jpegUnknown bytes a
+// pixel.
 func jpegDecodeBytes(cfg image.Config, frame *jpegFrame) int64 {
 	if frame == nil {
 		return decodeBytes(cfg.Width, cfg.Height, jpegUnknown)
@@ -225,6 +343,10 @@ func jpegDecodeBytes(cfg image.Config, frame *jpegFrame) int64 {
 
 	if frame.components == jpegCMYKComponents {
 		perPixel += jpegCMYKOutput
+	}
+
+	if cfg.ColorModel == color.RGBAModel {
+		perPixel += jpegRGBOutput
 	}
 
 	return decodeBytes(mcuCols*frame.mcuWidth, mcuRows*frame.mcuHeight, perPixel)

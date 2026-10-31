@@ -132,9 +132,11 @@ func newInfo(cfg image.Config, format Format, buf []byte, rest io.Reader) (Info,
 // WebP's bitstream up to its pixels. The info result is what the header says.
 // The rest result replays what was read, then reads on into r; when
 // [Info.Frame] is not empty, it reads instead as a WebP of the animation's
-// first frame alone, followed by the rest of r. The error matches one of
-// [ErrUnsupportedFormat], [ErrTooLarge] and [ErrUnreadable] under [errors.Is],
-// or is an [*UnsupportedFeatureError] or, when r fails, r's error.
+// first frame alone, followed by the rest of r. For a JPEG, rest fails at a
+// 33rd scan, or at an APP0 or APP14 segment after the frame header. The error
+// matches one of [ErrUnsupportedFormat], [ErrTooLarge] and [ErrUnreadable]
+// under [errors.Is], or is an [*UnsupportedFeatureError] or, when r fails, r's
+// error.
 func Read(r io.Reader) (info Info, rest io.Reader, err error) {
 	var buf bytes.Buffer
 
@@ -162,6 +164,10 @@ func Read(r io.Reader) (info Info, rest io.Reader, err error) {
 
 	if splice != nil && splice.from <= int64(buf.Len()) {
 		return info, io.MultiReader(bytes.NewReader(splice.head), bytes.NewReader(buf.Bytes()[splice.from:]), r), nil
+	}
+
+	if info.Format == formatJPEG {
+		return info, &readers.Sticky{R: &jpegReader{r: io.MultiReader(&buf, r)}}, nil
 	}
 
 	return info, io.MultiReader(&buf, r), nil

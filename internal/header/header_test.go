@@ -6,6 +6,7 @@ import (
 	"errors"
 	"image"
 	"io"
+	"slices"
 	"strings"
 	"testing"
 	"testing/iotest"
@@ -139,6 +140,23 @@ func TestReadInfo(t *testing.T) {
 		{
 			name:  "WebP, lossless",
 			input: lossless,
+			want: Info{
+				Format:      formatWebP,
+				Width:       64,
+				Height:      48,
+				Orientation: OrientationNormal,
+				DecodeBytes: wantLossless,
+			},
+		},
+		{
+			// Read as a JPEG, the XMP chunk would be a frame header and an
+			// APP0 segment.
+			name: "WebP, lossless after JPEG markers in XMP",
+			input: testimage.WebPFile(
+				testimage.WebPVP8X(1<<2, 64, 48),
+				testimage.WebPChunk("XMP ", []byte{0xff, 0xc0, 0, 2, 0xff, 0xe0, 0, 2}),
+				lossless[12:],
+			),
 			want: Info{
 				Format:      formatWebP,
 				Width:       64,
@@ -374,9 +392,31 @@ func TestReadAnimated(t *testing.T) {
 	}
 }
 
+// TestReadJPEG requires the reader [Read] returns for a JPEG to stop its decode
+// at an APP0 segment after the first scan, and to fail every read after.
+func TestReadJPEG(t *testing.T) {
+	jpegBytes := testimage.GradientJPEG(t, 30, 20)
+	eoi := len(jpegBytes) - 2
+	lateAPP0 := slices.Concat(jpegBytes[:eoi], testimage.JPEGSegment(0xe0, []byte("JFIF\x00")), jpegBytes[eoi:])
+
+	_, rest, err := Read(bytes.NewReader(lateAPP0))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, _, err := image.Decode(rest); !errors.Is(err, errJPEGLateApp) {
+		t.Errorf("got %v, want %v", err, errJPEGLateApp)
+	}
+
+	if _, err := rest.Read(make([]byte, 1)); err != errJPEGLateApp {
+		t.Errorf("read again: got %v, want %v", err, errJPEGLateApp)
+	}
+}
+
 // FuzzRead requires each error from [Read] to be one of the errors its doc
 // names, each [Info] it returns to have a positive size and estimate, and the
-// reader it returns to replay the whole input when [Info.Frame] is empty.
+// reader it returns to replay the whole input when [Info.Frame] is empty,
+// unless it stops a JPEG.
 func FuzzRead(f *testing.F) {
 	src := testimage.Gradient(30, 20)
 	jpegBytes := testimage.EncodeJPEG(f, src)
@@ -413,6 +453,10 @@ func FuzzRead(f *testing.F) {
 		}
 
 		replayed, err := io.ReadAll(rest)
+		if errors.Is(err, errJPEGScans) || errors.Is(err, errJPEGLateApp) {
+			return
+		}
+
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -1,13 +1,65 @@
 package header
 
 import (
+	"bytes"
 	"encoding/binary"
+	"errors"
 	"image"
+	"image/color"
+	"io"
 	"slices"
 	"testing"
+	"testing/iotest"
 
 	"github.com/superiority-dev/blurb/internal/testimage"
 )
+
+func TestJPEGReader(t *testing.T) {
+	soi, eoi := []byte{0xff, 0xd8}, []byte{0xff, 0xd9}
+	sof := testimage.JPEGSegment(0xc0, []byte{8, 0, 1, 0, 1, 1, 1, 0x11, 0})
+	progressive := testimage.JPEGSegment(0xc2, []byte{8, 0, 1, 0, 1, 1, 1, 0x11, 0})
+
+	// A scan of one component, its entropy data holding a stuffed 0xff and an
+	// RST0 marker.
+	scan := append(testimage.JPEGSegment(0xda, []byte{1, 1, 0, 0, 63, 0}), 0x12, 0xff, 0x00, 0x34, 0xff, 0xd0, 0x56)
+	scans := func(n int) []byte { return bytes.Repeat(scan, n) }
+	app0 := testimage.JPEGSegment(0xe0, []byte("JFIF\x00"))
+	app14 := testimage.JPEGSegment(0xee, []byte("Adobe\x00\x00\x00\x00\x00\x00\x00"))
+	fill := []byte{0xff, 0xff}
+
+	// An APP1 segment of over 256 bytes whose payload holds SOS and APP0
+	// segments of no payload.
+	decoys := testimage.JPEGSegment(0xe1, bytes.Repeat([]byte{0xff, 0xda, 0, 2, 0xff, 0xe0, 0, 2}, 40))
+
+	cases := []struct {
+		name  string
+		input []byte
+		err   error
+	}{
+		{name: "32 scans", input: slices.Concat(soi, sof, scans(32), eoi)},
+		{name: "33 scans", input: slices.Concat(soi, sof, scans(33), eoi), err: errJPEGScans},
+		{name: "an APP0 and an APP14 before the frame header", input: slices.Concat(soi, app0, app14, sof, scan, eoi)},
+		{name: "an APP0 after the frame header", input: slices.Concat(soi, sof, app0, scan, eoi), err: errJPEGLateApp},
+		{
+			name:  "an APP0 after a progressive frame header",
+			input: slices.Concat(soi, progressive, app0, scan, eoi),
+			err:   errJPEGLateApp,
+		},
+		{name: "an APP14 after the first scan", input: slices.Concat(soi, sof, scan, app14, eoi), err: errJPEGLateApp},
+		{name: "an APP0 after fill bytes", input: slices.Concat(soi, sof, scan, fill, app0), err: errJPEGLateApp},
+		{name: "codes inside a segment", input: slices.Concat(soi, decoys, sof, scan, decoys, eoi)},
+		{name: "33 scans after the EOI", input: slices.Concat(soi, sof, scan, eoi, scans(33))},
+	}
+
+	for _, tc := range cases {
+		for _, in := range []io.Reader{bytes.NewReader(tc.input), iotest.OneByteReader(bytes.NewReader(tc.input))} {
+			got, err := io.ReadAll(&jpegReader{r: in})
+			if !errors.Is(err, tc.err) || !bytes.HasPrefix(tc.input, got) || err != nil && len(got) == len(tc.input) {
+				t.Errorf("%s: read %d of %d bytes, %v, want %v", tc.name, len(got), len(tc.input), err, tc.err)
+			}
+		}
+	}
+}
 
 // TestScanJPEG requires scanJPEG to return the image's own frame header and
 // the orientation in the first EXIF segment, however the segments end.
@@ -187,6 +239,7 @@ func TestJPEGDecodeBytes(t *testing.T) {
 
 	cases := []struct {
 		name  string
+		model color.Model
 		frame *jpegFrame
 		want  int64
 	}{
@@ -257,14 +310,26 @@ func TestJPEGDecodeBytes(t *testing.T) {
 			want: 24 * 1000 * 1000,
 		},
 		{
+			name:  "baseline RGB",
+			model: color.RGBAModel,
+			frame: &jpegFrame{
+				progressive: false,
+				components:  3,
+				samples:     3,
+				mcuWidth:    8,
+				mcuHeight:   8,
+			},
+			want: 7 * 1000 * 1000,
+		},
+		{
 			name:  "no frame found",
 			frame: nil,
 			want:  24 * 1000 * 1000,
 		},
 	}
 
-	cfg := image.Config{Width: 1000, Height: 1000}
 	for _, tc := range cases {
+		cfg := image.Config{ColorModel: tc.model, Width: 1000, Height: 1000}
 		if got, want := jpegDecodeBytes(cfg, tc.frame), tc.want+1<<20; got != want {
 			t.Errorf("%s: %d, want %d", tc.name, got, want)
 		}

@@ -246,6 +246,7 @@ func (r *vp8lReader) readCacheBits() uint {
 	bits := uint(r.read(vp8lCacheBits))
 	if bits < 1 || bits > vp8lMaxCacheBits {
 		r.fail()
+		return 0
 	}
 
 	return bits

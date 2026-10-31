@@ -6,6 +6,7 @@ import (
 	"errors"
 	"image"
 	"io"
+	"strings"
 	"testing"
 	"testing/iotest"
 
@@ -180,13 +181,22 @@ func TestReadInfo(t *testing.T) {
 }
 
 // TestReadErrors requires [Read] to refuse each bad header with its error,
-// and to return the reader's own error however many bytes came before it.
+// named once in the message, and to return the reader's own error however many
+// bytes came before it.
 func TestReadErrors(t *testing.T) {
 	errDown := errors.New("connection reset")
 	jpegBytes := testimage.GradientJPEG(t, 30, 20)
 	pastLimit := testimage.JPEGPadTo(jpegBytes, 1<<20+1)
 	pngBytes := testimage.EncodePNG(t, testimage.Gradient(30, 20))
-	webpPastCanvas := testimage.WebPTwoFrames(testimage.WebPLossy()[12:], false, image.Pt(2, 0), image.Pt(64, 48))
+	lossy := testimage.WebPLossy()
+	webpPastCanvas := testimage.WebPTwoFrames(lossy[12:], false, image.Pt(2, 0), image.Pt(64, 48))
+	webpCut := testimage.WebPTwoFrames(lossy[12:], false, image.Point{}, image.Pt(64, 48))[:testimage.WebPFrameStart]
+	lossless := testimage.WebPLossless()
+	losslessPastLimit := testimage.WebPFile(
+		testimage.WebPVP8X(0, 64, 48),
+		testimage.WebPChunk("XMP ", make([]byte, 1<<20)),
+		lossless[12:],
+	)
 
 	failAfter := func(b []byte) io.Reader {
 		return io.MultiReader(bytes.NewReader(b), iotest.ErrReader(errDown))
@@ -204,6 +214,9 @@ func TestReadErrors(t *testing.T) {
 		{name: "GIF screen of 0x0", r: bytes.NewReader(testimage.GIFEmptyScreen()), want: ErrUnreadable},
 		{name: "PNG width 0", r: bytes.NewReader(testimage.PNGWithIHDR(pngBytes, 0, 0, 0, 0, 0)), want: ErrUnreadable},
 		{name: "WebP first frame past its canvas", r: bytes.NewReader(webpPastCanvas), want: ErrUnreadable},
+		{name: "WebP cut before its first frame", r: bytes.NewReader(webpCut), want: ErrUnreadable},
+		{name: "lossless WebP cut inside its bitstream", r: bytes.NewReader(lossless[:30]), want: ErrUnreadable},
+		{name: "lossless WebP bitstream past 1 MiB", r: bytes.NewReader(losslessPastLimit), want: ErrTooLarge},
 		{name: "failing, no bytes", r: failAfter(nil), want: errDown},
 		{name: "failing, PNG 4 bytes", r: failAfter(pngBytes[:4]), want: errDown},
 		{name: "failing, JPEG 20 bytes", r: failAfter(jpegBytes[:20]), want: errDown},
@@ -212,7 +225,8 @@ func TestReadErrors(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		if _, _, err := Read(tc.r); !errors.Is(err, tc.want) {
+		_, _, err := Read(tc.r)
+		if !errors.Is(err, tc.want) || strings.Count(err.Error(), tc.want.Error()) != 1 {
 			t.Errorf("%s: got %v, want %v", tc.name, err, tc.want)
 		}
 	}
@@ -264,6 +278,10 @@ func TestReadAnimated(t *testing.T) {
 	lossless := testimage.WebPLossless()
 	origin, canvas := image.Point{}, image.Pt(64, 48)
 
+	// A lossless alpha bitstream of a predictor transform and one group, each
+	// of one-symbol codes.
+	predicted := testimage.WebPChunk("ALPH", []byte{1, 0x81, 0x88, 0x88, 0x40, 0x44, 0x44, 0x00})
+
 	cases := []struct {
 		name  string
 		input []byte
@@ -289,7 +307,7 @@ func TestReadAnimated(t *testing.T) {
 				Width:       64,
 				Height:      48,
 				Orientation: OrientationNormal,
-				DecodeBytes: wantLossy + 64*48*5,
+				DecodeBytes: wantLossy + 64*48*5 + 3717,
 				Frame:       image.Rect(0, 0, 64, 48),
 			},
 		},
@@ -303,6 +321,20 @@ func TestReadAnimated(t *testing.T) {
 				Orientation: OrientationNormal,
 				DecodeBytes: wantLossless,
 				Frame:       image.Rect(0, 0, 64, 48),
+			},
+		},
+		{
+			// The predictor's sub-image is the frame's 16 by 12 tiles, not the
+			// canvas's 25 by 20, at 4 bytes each: 768 bytes and 208 more.
+			name:  "lossy with alpha at (20,10) on 100x80",
+			input: testimage.WebPTwoFrames(append(predicted, lossy[12:]...), true, image.Pt(20, 10), image.Pt(100, 80)),
+			want: Info{
+				Format:      formatWebP,
+				Width:       100,
+				Height:      80,
+				Orientation: OrientationNormal,
+				DecodeBytes: wantLossy + 64*48*5 + 976 + 3366 + 5*26,
+				Frame:       image.Rect(20, 10, 84, 58),
 			},
 		},
 		{
@@ -340,26 +372,8 @@ func TestReadAnimated(t *testing.T) {
 			t.Errorf("%s: read %d bytes of %d, %v; want them all", tc.name, in.N, len(tc.input), err)
 		}
 	}
-
-	// Cut before its first frame's bitstream, it is replayed as it is.
-	cut := testimage.WebPTwoFrames(lossy[12:], false, origin, canvas)[:testimage.WebPFrameStart]
-
-	_, rest, err := Read(bytes.NewReader(cut))
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if replayed, err := io.ReadAll(rest); err != nil || !bytes.Equal(replayed, cut) {
-		t.Errorf("cut before the first frame: replayed %d bytes, %v; want the input's %d", len(replayed), err, len(cut))
-	}
 }
 
-// The want constants are the test images' [Info.DecodeBytes], each with the
-// 1 MiB decoding overhead. Go's encoder writes a 4:2:0 JPEG, padded to 304 by
-// 208 at 1.5 bytes a pixel; the PNG decodes to RGBA, twice that when
-// interlaced, a gray one with a tRNS chunk to NRGBA, and the GIF to a paletted
-// image. The lossy WebP decodes to 4:2:0 beside its 206-byte VP8 chunk, the
-// lossless one at 6 bytes a pixel.
 // FuzzRead requires each error from [Read] to be one of the errors its doc
 // names, each [Info] it returns to have a positive size and estimate, and the
 // reader it returns to replay the whole input when [Info.Frame] is empty.
@@ -409,11 +423,19 @@ func FuzzRead(f *testing.F) {
 	})
 }
 
+// The want constants are the test images' [Info.DecodeBytes], each with the
+// 1 MiB decoding overhead. Go's encoder writes a 4:2:0 JPEG, padded to 304 by
+// 208 at 1.5 bytes a pixel; the PNG decodes to RGBA, twice that when
+// interlaced, a gray one with a tRNS chunk to NRGBA, and the GIF to a paletted
+// image. The lossy WebP decodes to 4:2:0 beside its 206-byte VP8 chunk, the
+// lossless one at 6 bytes a pixel beside the 4,293 bytes x/image's decoder
+// allocates for its bitstream's sub-images and Huffman trees, each allocation
+// rounded up as heapBytes rounds it.
 const (
 	wantJPEG       = 304*208*3/2 + 1<<20
 	wantPNG        = 300*200*4 + 1<<20
 	wantInterlaced = 2*300*200*4 + 1<<20
 	wantGIF        = 10*10 + 1<<20
 	wantLossy      = 64*48*3/2 + 206 + 1<<20
-	wantLossless   = 64*48*6 + 1<<20
+	wantLossless   = 64*48*6 + 4293 + 1<<20
 )

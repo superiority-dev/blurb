@@ -1,6 +1,7 @@
 package header
 
 import (
+	"bufio"
 	"encoding/binary"
 	"image"
 	"image/color"
@@ -48,6 +49,18 @@ const (
 	// webpFrameHeight is the offset in the frame header of the frame's
 	// height less one, a 24-bit field.
 	webpFrameHeight = 9
+
+	// webpAlphaHead is the length of the header an ALPH payload starts with,
+	// as per section 2.7.1.2; the alpha bitstream follows it.
+	webpAlphaHead = 1
+
+	// webpAlphaCompression is the bits of the ALPH header that name its
+	// compression method.
+	webpAlphaCompression = 0x03
+
+	// webpAlphaLossless is the compression method of alpha coded as a
+	// lossless bitstream.
+	webpAlphaLossless = 1
 )
 
 // A VP8 frame's partitions, as per RFC 6386 sections 9.1 and 9.5.
@@ -92,12 +105,8 @@ type webpKind int
 
 // The bitstreams, named by their chunks as per RFC 9649.
 const (
-	// webpUnknown is the kind of a walk that ended before it found a
-	// bitstream.
-	webpUnknown webpKind = iota
-
 	// webpVP8 is lossy.
-	webpVP8
+	webpVP8 webpKind = iota
 
 	// webpVP8L is lossless.
 	webpVP8L
@@ -124,6 +133,20 @@ type webpImage struct {
 	// start and length are where an animation's first frame's chunks start
 	// in the file and how many bytes they take.
 	start, length int64
+
+	// lossless is the memory [vp8lBytes] estimates for the lossless
+	// bitstream: the image's own, or a lossy image's alpha.
+	lossless int64
+}
+
+// size returns the image's size: the first frame's in an animation, canvas
+// otherwise.
+func (img webpImage) size(canvas image.Point) image.Point {
+	if img.animated {
+		return img.bounds.Size()
+	}
+
+	return canvas
 }
 
 // webpSplice represents a WebP file whose start is replaced.
@@ -133,8 +156,11 @@ type webpSplice struct {
 }
 
 // scanWebP walks the chunks of the WebP file r holds up to the image data
-// that decodes, an animation's first frame's in an animated file.
-func scanWebP(r io.Reader) webpImage {
+// that decodes, an animation's first frame's in an animated file. canvas is
+// the file's size, which a still image's alpha is decoded at. The error is r's
+// when r ends before the image data, or [ErrUnreadable] or errVP8L for a
+// malformed file.
+func scanWebP(r io.Reader, canvas image.Point) (webpImage, error) {
 	var (
 		img  webpImage
 		head [webpChunkHead]byte
@@ -142,37 +168,51 @@ func scanWebP(r io.Reader) webpImage {
 	)
 
 	if _, err := io.CopyN(io.Discard, r, webpHeaderLen); err != nil {
-		return img
+		return webpImage{}, err
 	}
 
 	for {
 		if _, err := io.ReadFull(r, head[:]); err != nil {
-			return webpImage{animated: img.animated}
+			return webpImage{}, err
 		}
 
 		pos += webpChunkHead
 		size := int64(binary.LittleEndian.Uint32(head[webpFourCCLen:]))
+		skip := size + size%2
 
 		switch string(head[:webpFourCCLen]) {
 		// The fourth character is a space, as per RFC 9649 section 2.5.
 		case "VP8 ":
 			img.kind, img.frame = webpVP8, min(size, webpMaxFrame)
-			return img
+			return img, nil
 		case "VP8L":
-			img.kind = webpVP8L
-			return img
+			lossless, err := vp8lImageBytes(bufio.NewReader(io.LimitReader(r, size)))
+			if err != nil {
+				return webpImage{}, err
+			}
+
+			img.kind, img.lossless = webpVP8L, lossless
+
+			return img, nil
 		case "ALPH":
-			img.alpha = true
+			payload := &io.LimitedReader{R: r, N: size}
+
+			lossless, err := webpAlphaBytes(payload, img.size(canvas))
+			if err != nil {
+				return webpImage{}, err
+			}
+
+			img.alpha, img.lossless, skip = true, lossless, payload.N+size%2
 		case "ANMF":
 			// A frame holds a bitstream, as per RFC 9649 section 2.7.1.1, so
 			// a second frame before one is malformed.
 			var frame [webpFrameHead]byte
 			if img.animated || size < webpFrameHead {
-				return webpImage{animated: true}
+				return webpImage{}, ErrUnreadable
 			}
 
 			if _, err := io.ReadFull(r, frame[:]); err != nil {
-				return webpImage{animated: true}
+				return webpImage{}, err
 			}
 
 			pos += webpFrameHead
@@ -187,8 +227,8 @@ func scanWebP(r io.Reader) webpImage {
 			continue
 		}
 
-		if _, err := io.CopyN(io.Discard, r, size+size%2); err != nil {
-			return webpImage{animated: img.animated}
+		if _, err := io.CopyN(io.Discard, r, skip); err != nil {
+			return webpImage{}, err
 		}
 
 		pos += size + size%2
@@ -196,23 +236,18 @@ func scanWebP(r io.Reader) webpImage {
 }
 
 // webpDecodeBytes estimates the peak memory decoding a WebP needs, given cfg
-// and img. An animation whose first frame's bitstream is known counts as that
-// frame alone; an unknown bitstream counts as lossy with alpha at cfg's size,
-// with webpMaxFrame bytes of compressed data.
+// and img. An animation counts as its first frame alone.
 func webpDecodeBytes(cfg image.Config, img webpImage) int64 {
 	alpha := cfg.ColorModel != color.YCbCrModel
-	if img.animated && img.kind != webpUnknown {
+	if img.animated {
 		cfg.Width, cfg.Height, alpha = img.bounds.Dx(), img.bounds.Dy(), img.alpha
 	}
 
-	switch img.kind {
-	case webpVP8L:
-		return decodeBytes(cfg.Width, cfg.Height, webpLossless)
-	case webpVP8:
-		return webpLossyBytes(cfg, img.frame, alpha)
-	default:
-		return webpLossyBytes(cfg, webpMaxFrame, true)
+	if img.kind == webpVP8L {
+		return decodeBytes(cfg.Width, cfg.Height, webpLossless) + img.lossless
 	}
+
+	return webpLossyBytes(cfg, img.frame, alpha) + img.lossless
 }
 
 // firstFrameSplice returns the splice that makes an animated WebP read as a
@@ -247,6 +282,22 @@ func webpLossyBytes(cfg image.Config, frame int64, alpha bool) int64 {
 	}
 
 	return n
+}
+
+// webpAlphaBytes returns the memory [vp8lBytes] estimates for the alpha of an
+// image of the given size, read from the ALPH chunk payload r, and 0 for alpha
+// stored any other way. The error is r's when r ends first, or errVP8L.
+func webpAlphaBytes(r io.Reader, size image.Point) (bytes int64, err error) {
+	var head [webpAlphaHead]byte
+	if _, err := io.ReadFull(r, head[:]); err != nil {
+		return 0, err
+	}
+
+	if head[0]&webpAlphaCompression != webpAlphaLossless {
+		return 0, nil
+	}
+
+	return vp8lBytes(bufio.NewReader(r), size.X, size.Y)
 }
 
 // uint24 reads a little-endian 24-bit field.

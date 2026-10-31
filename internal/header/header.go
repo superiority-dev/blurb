@@ -80,9 +80,9 @@ type Info struct {
 
 // newInfo returns the [Info] for an image whose [image.DecodeConfig] result is
 // cfg; buf holds the bytes read so far and rest reads the bytes after them. For
-// an animated WebP whose first frame's bitstream scanWebP found, it also
-// returns the splice that makes the image read as that frame alone. It returns
-// [ErrUnreadable] for no pixels or a frame not within the canvas.
+// an animated WebP, it also returns the splice that makes the image read as
+// its first frame alone. It returns [ErrUnreadable] for no pixels or a frame
+// not within the canvas, and scanWebP's error for a WebP it cannot walk.
 func newInfo(cfg image.Config, format Format, buf []byte, rest io.Reader) (Info, *webpSplice, error) {
 	if cfg.Width <= 0 || cfg.Height <= 0 {
 		return Info{}, nil, ErrUnreadable
@@ -102,10 +102,14 @@ func newInfo(cfg image.Config, format Format, buf []byte, rest io.Reader) (Info,
 		info.Orientation = orientation
 		info.DecodeBytes = pngDecodeBytes(cfg, pngInterlaced(buf), transparent)
 	case formatWebP:
-		img := scanWebP(io.MultiReader(bytes.NewReader(buf), rest))
+		img, err := scanWebP(io.MultiReader(bytes.NewReader(buf), rest), image.Pt(cfg.Width, cfg.Height))
+		if err != nil {
+			return Info{}, nil, err
+		}
+
 		info.DecodeBytes = webpDecodeBytes(cfg, img)
 
-		if img.animated && img.kind != webpUnknown {
+		if img.animated {
 			if !img.bounds.In(image.Rect(0, 0, cfg.Width, cfg.Height)) {
 				return Info{}, nil, ErrUnreadable
 			}
@@ -124,12 +128,13 @@ func newInfo(cfg image.Config, format Format, buf []byte, rest io.Reader) (Info,
 }
 
 // Read reads r's header, up to 1 MiB: as much as [image.DecodeConfig] needs
-// and, for a PNG or a WebP, its chunks up to the image data. The info result is
-// what the header says. The rest result replays what was read, then reads on
-// into r; when [Info.Frame] is not empty, it reads instead as a WebP of the
-// animation's first frame alone, followed by the rest of r. The error matches
-// one of [ErrUnsupportedFormat], [ErrTooLarge] and [ErrUnreadable] under
-// [errors.Is], or is an [*UnsupportedFeatureError] or, when r fails, r's error.
+// and, for a PNG or a WebP, its chunks up to the image data, and a lossless
+// WebP's bitstream up to its pixels. The info result is what the header says.
+// The rest result replays what was read, then reads on into r; when
+// [Info.Frame] is not empty, it reads instead as a WebP of the animation's
+// first frame alone, followed by the rest of r. The error matches one of
+// [ErrUnsupportedFormat], [ErrTooLarge] and [ErrUnreadable] under [errors.Is],
+// or is an [*UnsupportedFeatureError] or, when r fails, r's error.
 func Read(r io.Reader) (info Info, rest io.Reader, err error) {
 	var buf bytes.Buffer
 
@@ -141,8 +146,10 @@ func Read(r io.Reader) (info Info, rest io.Reader, err error) {
 	cfg, format, err := image.DecodeConfig(in)
 	if err == nil {
 		info, splice, err = newInfo(cfg, Format(format), buf.Bytes(), in)
-	} else {
-		err = configError(err, Format(format), buf.Len())
+	}
+
+	if err != nil {
+		err = headerError(err, Format(format), buf.Len())
 	}
 
 	if src.Err() != nil {
@@ -160,12 +167,14 @@ func Read(r io.Reader) (info Info, rest io.Reader, err error) {
 	return info, io.MultiReader(&buf, r), nil
 }
 
-// configError returns the error [Read] reports when [image.DecodeConfig]
-// fails with err, having read n bytes of an image in format.
-func configError(err error, format Format, n int) error {
+// headerError returns the error [Read] reports when [image.DecodeConfig] or
+// newInfo fails with err, having read n bytes of an image in format.
+func headerError(err error, format Format, n int) error {
 	feature, unsupported := unsupportedFeature(err)
 
 	switch {
+	case errors.Is(err, ErrUnreadable):
+		return err
 	case n == 0:
 		return ErrUnreadable
 	case unsupported:

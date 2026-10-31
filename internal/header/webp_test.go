@@ -3,8 +3,10 @@ package header
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"image"
 	"image/color"
+	"io"
 	"testing"
 
 	"github.com/superiority-dev/blurb/internal/testimage"
@@ -21,11 +23,14 @@ func TestScanWebP(t *testing.T) {
 	origin, canvas := image.Point{}, image.Pt(64, 48)
 
 	lossyFrame := testimage.WebPFrame(lossy[12:], origin)
+	alphaSize := int(binary.LittleEndian.Uint32(alpha[testimage.WebPChunksStart+4:]))
+	alphaPayload := alpha[testimage.WebPChunksStart+8 : testimage.WebPChunksStart+8+alphaSize]
 
 	cases := []struct {
 		name  string
 		input []byte
 		want  webpImage
+		err   error
 	}{
 		{
 			name:  "lossy",
@@ -39,23 +44,26 @@ func TestScanWebP(t *testing.T) {
 			name:  "lossy with alpha, after VP8X and ALPH",
 			input: alpha,
 			want: webpImage{
-				kind:  webpVP8,
-				frame: 206,
-				alpha: true,
+				kind:     webpVP8,
+				frame:    206,
+				alpha:    true,
+				lossless: 3717,
 			},
 		},
 		{
 			name:  "lossless",
 			input: lossless,
 			want: webpImage{
-				kind: webpVP8L,
+				kind:     webpVP8L,
+				lossless: 4293,
 			},
 		},
 		{
 			name:  "lossless, after VP8X",
 			input: testimage.WebPExtendedLossless(),
 			want: webpImage{
-				kind: webpVP8L,
+				kind:     webpVP8L,
+				lossless: 4293,
 			},
 		},
 		{
@@ -81,6 +89,7 @@ func TestScanWebP(t *testing.T) {
 				alpha:    true,
 				start:    testimage.WebPFrameStart,
 				length:   int64(len(alpha) - testimage.WebPChunksStart),
+				lossless: 3717,
 			},
 		},
 		{
@@ -92,6 +101,7 @@ func TestScanWebP(t *testing.T) {
 				bounds:   image.Rect(0, 0, 64, 48),
 				start:    testimage.WebPFrameStart,
 				length:   int64(len(lossless) - 12),
+				lossless: 4293,
 			},
 		},
 		{
@@ -113,9 +123,7 @@ func TestScanWebP(t *testing.T) {
 				testimage.WebPFrame(nil, origin),
 				lossyFrame,
 			),
-			want: webpImage{
-				animated: true,
-			},
+			err: ErrUnreadable,
 		},
 		{
 			name: "animated, an ALPH chunk before the first frame",
@@ -134,6 +142,32 @@ func TestScanWebP(t *testing.T) {
 					len(testimage.WebPChunk("ALPH", []byte{0}))),
 				length: int64(len(lossy) - 12),
 			},
+		},
+		{
+			// Read as a chunk, the bytes past the bitstream would claim 4 GiB.
+			name: "an ALPH chunk with bytes past its bitstream",
+			input: testimage.WebPFile(
+				testimage.WebPVP8X(1<<4, 64, 48),
+				testimage.WebPChunk("ALPH", append(bytes.Clone(alphaPayload), bytes.Repeat([]byte{0xff}, 5000)...)),
+				lossy[12:],
+			),
+			want: webpImage{
+				kind:     webpVP8,
+				frame:    206,
+				alpha:    true,
+				lossless: 3717,
+			},
+		},
+		{
+			// A lossless alpha bitstream whose subtract green transform comes
+			// twice.
+			name: "an ALPH chunk with an invalid bitstream",
+			input: testimage.WebPFile(
+				testimage.WebPVP8X(1<<4, 64, 48),
+				testimage.WebPChunk("ALPH", []byte{1, 0b101101}),
+				lossy[12:],
+			),
+			err: errVP8L,
 		},
 		{
 			name: "after an odd chunk and its padding",
@@ -158,14 +192,12 @@ func TestScanWebP(t *testing.T) {
 		{
 			name:  "cut before the frame",
 			input: lossy[:12+4],
-			want:  webpImage{},
+			err:   io.ErrUnexpectedEOF,
 		},
 		{
 			name:  "animated, cut inside the first frame's header",
 			input: testimage.WebPTwoFrames(lossy[12:], false, origin, canvas)[:testimage.WebPFrameStart-16+4],
-			want: webpImage{
-				animated: true,
-			},
+			err:   io.ErrUnexpectedEOF,
 		},
 		{
 			name: "animated, cut inside the first frame's ALPH",
@@ -175,15 +207,19 @@ func TestScanWebP(t *testing.T) {
 				origin,
 				canvas,
 			)[:testimage.WebPFrameStart+8+2],
-			want: webpImage{
-				animated: true,
-			},
+			err: io.EOF,
+		},
+		{
+			name:  "cut inside the ALPH chunk, after its bitstream's trees",
+			input: alpha[:testimage.WebPChunksStart+8+alphaSize-1],
+			err:   io.EOF,
 		},
 	}
 
 	for _, tc := range cases {
-		if got := scanWebP(bytes.NewReader(tc.input)); got != tc.want {
-			t.Errorf("%s: %+v, want %+v", tc.name, got, tc.want)
+		got, err := scanWebP(bytes.NewReader(tc.input), canvas)
+		if got != tc.want || !errors.Is(err, tc.err) {
+			t.Errorf("%s: %+v, %v, want %+v, %v", tc.name, got, err, tc.want, tc.err)
 		}
 	}
 }
@@ -218,31 +254,28 @@ func TestWebPDecodeBytes(t *testing.T) {
 			name:  "lossy with alpha",
 			model: color.NYCbCrAModel,
 			img: webpImage{
-				kind: webpVP8,
+				kind:     webpVP8,
+				lossless: 10_000,
 			},
-			want: ycbcr + 5*1000*1000,
+			want: ycbcr + 5*1000*1000 + 10_000,
 		},
 		{
 			name:  "lossless",
 			model: color.NRGBAModel,
 			img: webpImage{
-				kind: webpVP8L,
+				kind:     webpVP8L,
+				lossless: 10_000,
 			},
-			want: 6 * 1000 * 1000,
+			want: 6*1000*1000 + 10_000,
 		},
 		{
 			name:  "lossless after VP8X, reported as YCbCr",
 			model: color.YCbCrModel,
 			img: webpImage{
-				kind: webpVP8L,
+				kind:     webpVP8L,
+				lossless: 10_000,
 			},
-			want: 6 * 1000 * 1000,
-		},
-		{
-			name:  "unknown",
-			model: color.YCbCrModel,
-			img:   webpImage{},
-			want:  ycbcr + 1<<19 + 8<<24 + 5*1000*1000,
+			want: 6*1000*1000 + 10_000,
 		},
 		{
 			name:  "animated, a lossy first frame of 500x500",
@@ -263,16 +296,20 @@ func TestWebPDecodeBytes(t *testing.T) {
 				animated: true,
 				bounds:   image.Rect(0, 0, 500, 500),
 				alpha:    true,
+				lossless: 10_000,
 			},
-			want: 512*512*3/2 + 5*500*500,
+			want: 512*512*3/2 + 5*500*500 + 10_000,
 		},
 		{
-			name:  "animated, the first frame not reached",
+			name:  "animated, a lossless first frame of 40x40",
 			model: color.YCbCrModel,
 			img: webpImage{
+				kind:     webpVP8L,
 				animated: true,
+				bounds:   image.Rect(0, 0, 40, 40),
+				lossless: 10_000,
 			},
-			want: ycbcr + 1<<19 + 8<<24 + 5*1000*1000,
+			want: 6*40*40 + 10_000,
 		},
 	}
 
@@ -280,6 +317,41 @@ func TestWebPDecodeBytes(t *testing.T) {
 		cfg := image.Config{ColorModel: tc.model, Width: 1000, Height: 1000}
 		if got, want := webpDecodeBytes(cfg, tc.img), tc.want+1<<20; got != want {
 			t.Errorf("%s: %d, want %d", tc.name, got, want)
+		}
+	}
+}
+
+func TestWebPAlphaBytes(t *testing.T) {
+	alpha := testimage.WebPLossyAlpha()
+	size := int(binary.LittleEndian.Uint32(alpha[testimage.WebPChunksStart+4:]))
+	payload := alpha[testimage.WebPChunksStart+8 : testimage.WebPChunksStart+8+size]
+
+	filtered := bytes.Clone(payload)
+	filtered[0] |= 1 << 2
+
+	unknown := bytes.Clone(payload)
+	unknown[0] = unknown[0]&^3 | 2
+
+	cases := []struct {
+		name    string
+		payload []byte
+		want    int64
+		err     error
+	}{
+		// 3,717 bytes is what x/image's decoder allocates for the alpha's
+		// sub-images and Huffman trees, each allocation rounded up as
+		// heapBytes rounds it.
+		{name: "lossless", payload: payload, want: 3717},
+		{name: "lossless, filtered", payload: filtered, want: 3717},
+		{name: "uncompressed", payload: append([]byte{0}, make([]byte, 64*48)...), want: 0},
+		{name: "an unknown compression method", payload: unknown, want: 0},
+		{name: "empty", payload: nil, err: io.EOF},
+	}
+
+	for _, tc := range cases {
+		got, err := webpAlphaBytes(bytes.NewReader(tc.payload), image.Pt(64, 48))
+		if got != tc.want || !errors.Is(err, tc.err) {
+			t.Errorf("%s: %d, %v, want %d, %v", tc.name, got, err, tc.want, tc.err)
 		}
 	}
 }

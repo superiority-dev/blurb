@@ -150,7 +150,7 @@ const maxTestBody = 256 << 10 // 256 KiB
 var discardLogger = slog.New(slog.DiscardHandler)
 
 // testAPI returns an api that fetches from 127.0.0.1 with a short timeout.
-func testAPI(t *testing.T) *api {
+func testAPI(t testing.TB) *api {
 	t.Helper()
 
 	fetcher, err := fetch.New(300*time.Millisecond, maxTestBody, fetch.Options{

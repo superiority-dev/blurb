@@ -360,6 +360,55 @@ func TestReadAnimated(t *testing.T) {
 // interlaced, a gray one with a tRNS chunk to NRGBA, and the GIF to a paletted
 // image. The lossy WebP decodes to 4:2:0 beside its 206-byte VP8 chunk, the
 // lossless one at 6 bytes a pixel.
+// FuzzRead requires each error from [Read] to be one of the errors its doc
+// names, each [Info] it returns to have a positive size and estimate, and the
+// reader it returns to replay the whole input when [Info.Frame] is empty.
+func FuzzRead(f *testing.F) {
+	src := testimage.Gradient(30, 20)
+	jpegBytes := testimage.EncodeJPEG(f, src)
+
+	for _, seed := range [][]byte{
+		jpegBytes,
+		testimage.JPEGWithEXIF(jpegBytes, 6, binary.LittleEndian),
+		testimage.EncodePNG(f, src),
+		testimage.EncodeGIF(f, src),
+		testimage.GIFAnimated(),
+		testimage.WebPLossy(),
+		testimage.WebPLossyAlpha(),
+		testimage.WebPLossless(),
+		testimage.WebPExtendedLossless(),
+		testimage.WebPAnimated(),
+	} {
+		f.Add(seed)
+	}
+
+	f.Fuzz(func(t *testing.T, data []byte) {
+		info, rest, err := Read(bytes.NewReader(data))
+		if err != nil {
+			_, unsupported := errors.AsType[*UnsupportedFeatureError](err)
+			if !unsupported && !errors.Is(err, ErrUnsupportedFormat) && !errors.Is(err, ErrUnreadable) &&
+				!errors.Is(err, ErrTooLarge) {
+				t.Fatalf("got %v, an error Read does not document", err)
+			}
+
+			return
+		}
+
+		if info.Width <= 0 || info.Height <= 0 || info.DecodeBytes <= 0 {
+			t.Fatalf("got %+v, want a positive size and estimate", info)
+		}
+
+		replayed, err := io.ReadAll(rest)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if info.Frame.Empty() && !bytes.Equal(replayed, data) {
+			t.Fatalf("rest replays %d bytes, want the input's %d", len(replayed), len(data))
+		}
+	})
+}
+
 const (
 	wantJPEG       = 304*208*3/2 + 1<<20
 	wantPNG        = 300*200*4 + 1<<20

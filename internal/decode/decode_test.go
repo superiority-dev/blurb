@@ -2,6 +2,7 @@ package decode
 
 import (
 	"bytes"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"image"
@@ -244,6 +245,52 @@ func TestSmallErrors(t *testing.T) {
 	}
 }
 
+// FuzzSmall requires each error from [Small] to match [header.ErrUnreadable],
+// and each image it returns to have [maxSide] as its longer side and its
+// source's aspect ratio.
+func FuzzSmall(f *testing.F) {
+	src := testimage.Gradient(30, 20)
+	jpegBytes := testimage.EncodeJPEG(f, src)
+
+	for _, seed := range [][]byte{
+		jpegBytes,
+		testimage.JPEGWithEXIF(jpegBytes, 6, binary.BigEndian),
+		testimage.EncodePNG(f, src),
+		testimage.EncodeGIF(f, src),
+		testimage.GIFAnimated(),
+		testimage.WebPLossy(),
+		testimage.WebPLossyAlpha(),
+		testimage.WebPLossless(),
+		testimage.WebPAnimated(),
+	} {
+		f.Add(seed)
+	}
+
+	f.Fuzz(func(t *testing.T, data []byte) {
+		info, rest, err := header.Read(bytes.NewReader(data))
+		if err != nil || int64(info.Width)*int64(info.Height) > maxFuzzPixels {
+			return
+		}
+
+		small, _, err := Small(rest, info)
+		if err != nil {
+			if !errors.Is(err, header.ErrUnreadable) {
+				t.Fatalf("got %v, want an error matching header.ErrUnreadable", err)
+			}
+
+			return
+		}
+
+		// The shorter side is within a pixel of what the source's aspect ratio gives.
+		got := small.Bounds()
+		skew := got.Dx()*info.Height - got.Dy()*info.Width
+		if got.Min != (image.Point{}) || max(got.Dx(), got.Dy()) != maxSide ||
+			max(skew, -skew) > max(info.Width, info.Height) {
+			t.Fatalf("%dx%d image: got bounds %v", info.Width, info.Height, got)
+		}
+	})
+}
+
 func TestHasAlpha(t *testing.T) {
 	r := image.Rect(0, 0, 1, 1)
 	opaque := image.NewPaletted(r, color.Palette{color.Black, color.White})
@@ -269,6 +316,10 @@ func TestHasAlpha(t *testing.T) {
 		}
 	}
 }
+
+// maxFuzzPixels is the most pixels of an image [FuzzSmall] decodes, so that
+// each input decodes quickly.
+const maxFuzzPixels = 1 << 16
 
 // opaqueBounds is the smallest rectangle holding img's opaque pixels.
 func opaqueBounds(img *image.RGBA) image.Rectangle {

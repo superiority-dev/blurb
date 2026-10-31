@@ -332,6 +332,35 @@ func TestHashPostBodyErrors(t *testing.T) {
 	}
 }
 
+// FuzzHashPost requires each answer to POST /hash to be JSON and none to be a
+// 500, which is the status of a recovered panic and of an error [classify] has
+// no case for.
+func FuzzHashPost(f *testing.F) {
+	jpegBytes := testimage.GradientJPEG(f, 30, 20)
+
+	f.Add("", jpegBytes)
+	f.Add("formats=blurhash,thumbhash&extras=dominant_colors,phash,lqip,sha256", jpegBytes)
+	f.Add("formats=thumbhash&extras=lqip", testimage.WebPAnimated())
+	f.Add("extras=sha256", testimage.GIFAnimated())
+	f.Add("formats=&formats=blurhash", testimage.WebPLossyAlpha())
+	f.Add("extras=%zz", []byte("not an image"))
+
+	hashAPI := testAPI(f)
+	h := NewHandler(testConfig(), hashAPI.fetcher, hashAPI.hasher.decodeQueue, testReady(), discardLogger)
+
+	f.Fuzz(func(t *testing.T, query string, body []byte) {
+		r := httptest.NewRequest(http.MethodPost, "/hash", bytes.NewReader(body))
+		r.URL.RawQuery = query
+
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, r)
+
+		if rec.Code == http.StatusInternalServerError || !json.Valid(rec.Body.Bytes()) {
+			t.Fatalf("query %q, %d-byte body: got %d %s", query, len(body), rec.Code, rec.Body.String())
+		}
+	})
+}
+
 // TestClientBodyRead requires a read error to also match errBodyTimeout for a
 // passed deadline, [context.Canceled] for another network error, errBodyCut
 // when the body ended early and errBodyMalformed otherwise, except an

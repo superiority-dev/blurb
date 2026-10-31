@@ -28,12 +28,14 @@ const (
 	codeUnavailable      = "unavailable"
 	codeNotReady         = "not_ready"
 	codeUpstreamTimeout  = "upstream_timeout"
+	codeBodyTimeout      = "body_timeout"
 )
 
 // messageInternal is the message of every 500, which gives no detail.
 const messageInternal = "internal error"
 
 var (
+	errBodyTimeout   = errors.New("httpapi: request body was not read in time")
 	errBodyCut       = errors.New("httpapi: request body ended early")
 	errBodyMalformed = errors.New("httpapi: request body is malformed")
 )
@@ -85,6 +87,8 @@ func classify(err error) (status int, code, message string) {
 			"the image needs more memory to decode than the service may use"
 	case errors.Is(err, header.ErrTooLarge):
 		return http.StatusRequestEntityTooLarge, codeTooLarge, "the image header is too large"
+	case errors.Is(err, errBodyTimeout):
+		return http.StatusRequestTimeout, codeBodyTimeout, "the request body was not read in time"
 	case errors.Is(err, errBodyCut):
 		return http.StatusBadRequest, codeBadRequest, "the request body ended early"
 	case errors.Is(err, errBodyMalformed):

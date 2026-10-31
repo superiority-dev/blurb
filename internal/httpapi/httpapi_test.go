@@ -176,6 +176,7 @@ func testConfig() Config {
 		XComponents:     4,
 		YComponents:     3,
 		MaxBodyBytes:    maxTestBody,
+		BodyTimeout:     10 * time.Second,
 		MaxAge:          time.Hour,
 		RequestIDHeader: "X-Request-Id",
 	}

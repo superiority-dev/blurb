@@ -59,8 +59,8 @@ type Config struct {
 	AllowPrivateAddresses bool
 
 	// FetchTimeout is the time limit for each fetch, including connection
-	// time, any redirects and reading the body, but not a wait for a decode
-	// slot.
+	// time, any redirects and reading the body, and for reading each POST
+	// body, but not a wait for a decode slot.
 	FetchTimeout time.Duration
 
 	MaxDownloadBytes int64

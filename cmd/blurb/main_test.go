@@ -24,8 +24,9 @@ import (
 )
 
 // TestRunServes requires the service to listen, report ready, apply its path
-// prefix, pixel limit, BlurHash components and request id header, serve the
-// probes outside the prefix, and stop cleanly when its context ends.
+// prefix, pixel limit, BlurHash components, request id header and body
+// deadline, serve the probes outside the prefix, and stop cleanly when its
+// context ends.
 func TestRunServes(t *testing.T) {
 	// A soft memory limit of 64 MiB, as GOMEMLIMIT sets it, below any cgroup
 	// limit a test machine sets.
@@ -99,10 +100,10 @@ func TestRunServes(t *testing.T) {
 		t.Errorf("X-Amz-Cf-Id %q, want cf-1", got)
 	}
 
-	post := func(photo []byte) (status int, hash string) {
+	post := func(body io.Reader) (status int, hash string) {
 		t.Helper()
 
-		resp, err := http.Post("http://"+addr+"/v1/hash", "image/jpeg", bytes.NewReader(photo))
+		resp, err := http.Post("http://"+addr+"/v1/hash", "image/jpeg", body)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -118,11 +119,22 @@ func TestRunServes(t *testing.T) {
 		return resp.StatusCode, res.BlurHash
 	}
 
-	if got, _ := post(testimage.GradientJPEG(t, 1001, 1000)); got != http.StatusRequestEntityTooLarge {
+	if got, _ := post(bytes.NewReader(testimage.GradientJPEG(t, 1001, 1000))); got != http.StatusRequestEntityTooLarge {
 		t.Errorf("1001 by 1000 under a 1 MP limit: %d, want 413", got)
 	}
 
-	status, hash := post(testimage.GradientJPEG(t, 64, 48))
+	// The body arrives in two parts, the second well inside FETCH_TIMEOUT.
+	photo := testimage.GradientJPEG(t, 64, 48)
+	pr, pw := io.Pipe()
+
+	go func() {
+		_, _ = pw.Write(photo[:len(photo)/2])
+		time.Sleep(100 * time.Millisecond)
+		_, _ = pw.Write(photo[len(photo)/2:])
+		_ = pw.Close()
+	}()
+
+	status, hash := post(pr)
 	if x, y, err := blurhash.Components(hash); status != http.StatusOK || err != nil || x != 5 || y != 2 {
 		t.Errorf("64 by 48: %d, %q with %d by %d components (%v); want 200 and 5 by 2", status, hash, x, y, err)
 	}

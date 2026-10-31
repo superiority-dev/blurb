@@ -191,7 +191,8 @@ type swatch struct {
 	Share float64 `json:"share"`
 }
 
-// pausableDeadline is a fetched image's body, whose deadline can pause.
+// pausableDeadline is a body whose deadline can pause: a fetched image's, or
+// a POST body.
 type pausableDeadline interface {
 	PauseDeadline()
 	ResumeDeadline()

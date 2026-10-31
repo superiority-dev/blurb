@@ -25,6 +25,7 @@ type api struct {
 	pathPrefix      string
 	requestIDHeader string
 	maxBodyBytes    int64
+	bodyTimeout     time.Duration
 	maxAge          time.Duration
 	fetcher         *fetch.Fetcher
 	hasher          hasher
@@ -35,6 +36,7 @@ func newAPI(cfg Config, fetcher *fetch.Fetcher, decodeQueue *queue.Queue) *api {
 		pathPrefix:      cfg.PathPrefix,
 		requestIDHeader: cfg.RequestIDHeader,
 		maxBodyBytes:    cfg.MaxBodyBytes,
+		bodyTimeout:     cfg.BodyTimeout,
 		maxAge:          cfg.MaxAge,
 		fetcher:         fetcher,
 		hasher: hasher{

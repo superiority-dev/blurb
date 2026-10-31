@@ -18,6 +18,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"syscall"
 	"testing"
@@ -331,9 +332,10 @@ func TestHashPostBodyErrors(t *testing.T) {
 	}
 }
 
-// TestClientBodyRead requires a read error to also match [context.Canceled] for
-// a network error, errBodyCut when the body ended early and errBodyMalformed
-// otherwise, except an [*http.MaxBytesError], which matches none of them.
+// TestClientBodyRead requires a read error to also match errBodyTimeout for a
+// passed deadline, [context.Canceled] for another network error, errBodyCut
+// when the body ended early and errBodyMalformed otherwise, except an
+// [*http.MaxBytesError], which matches none of them.
 func TestClientBodyRead(t *testing.T) {
 	cases := []struct {
 		name  string
@@ -343,17 +345,22 @@ func TestClientBodyRead(t *testing.T) {
 		{name: "cut", err: io.ErrUnexpectedEOF, class: errBodyCut},
 		{name: "framing", err: errors.New("invalid byte in chunk length"), class: errBodyMalformed},
 		{name: "network", err: &net.OpError{Op: "read", Net: "tcp", Err: syscall.ECONNRESET}, class: context.Canceled},
+		{
+			name:  "deadline",
+			err:   &net.OpError{Op: "read", Net: "tcp", Err: os.ErrDeadlineExceeded},
+			class: errBodyTimeout,
+		},
 		{name: "too large", err: &http.MaxBytesError{Limit: 1}},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := clientBody{r: iotest.ErrReader(tc.err)}.Read(make([]byte, 1))
+			_, err := (&clientBody{r: iotest.ErrReader(tc.err)}).Read(make([]byte, 1))
 			if !errors.Is(err, tc.err) {
 				t.Fatalf("got %v, want it to wrap %v", err, tc.err)
 			}
 
-			for _, class := range []error{context.Canceled, errBodyCut, errBodyMalformed} {
+			for _, class := range []error{errBodyTimeout, context.Canceled, errBodyCut, errBodyMalformed} {
 				if want := class == tc.class; errors.Is(err, class) != want {
 					t.Errorf("got %v; matching %v is %t, want %t", err, class, !want, want)
 				}
@@ -361,6 +368,128 @@ func TestClientBodyRead(t *testing.T) {
 		})
 	}
 }
+
+// TestClientBodyDeadline requires a body that stalls, inside its header or
+// after it, or that arrives a byte at a time, to be answered 408 once its
+// deadline passes, and a complete request to be served after it.
+func TestClientBodyDeadline(t *testing.T) {
+	photo := testimage.GradientJPEG(t, 300, 200)
+
+	cases := []struct {
+		name    string
+		sent    int
+		trickle bool // the rest follows a byte every quarter deadline
+	}{
+		{name: "inside the header", sent: 1},
+		{name: "after the header", sent: len(photo) / 2},
+		{name: "a byte at a time", sent: 1, trickle: true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			decodeQueue, err := queue.New(1, queue.Options{})
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			hashAPI := testAPI(t)
+			hashAPI.bodyTimeout = testBodyTimeout
+			hashAPI.hasher.decodeQueue = decodeQueue
+
+			// Closed after the test's connections, since Close waits for their requests.
+			srv := httptest.NewServer(apiHandler(hashAPI, discardLogger))
+			t.Cleanup(srv.Close)
+
+			start := time.Now()
+			stalled := sendPart(t, srv.Listener.Addr().String(), photo, tc.sent)
+
+			if tc.trickle {
+				go func() {
+					for _, b := range photo[tc.sent:] {
+						time.Sleep(testBodyTimeout / 4)
+
+						if _, err := stalled.Write([]byte{b}); err != nil {
+							return
+						}
+					}
+				}()
+			}
+
+			resp, err := http.ReadResponse(bufio.NewReader(stalled), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			b, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+
+			if resp.StatusCode != http.StatusRequestTimeout || !strings.Contains(string(b), `"code":"body_timeout"`) {
+				t.Fatalf("stalled body: got %d %s, want 408 body_timeout", resp.StatusCode, b)
+			}
+
+			if took := time.Since(start); took > 4*testBodyTimeout {
+				t.Errorf("stalled body answered after %v, want about %v", took, testBodyTimeout)
+			}
+
+			resp, err = http.Post(srv.URL+"/hash", "image/jpeg", bytes.NewReader(photo))
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp.Body.Close()
+
+			if resp.StatusCode != http.StatusOK {
+				t.Errorf("after the stalled body: got %d, want 200", resp.StatusCode)
+			}
+		})
+	}
+}
+
+// TestClientBodyDeadlinePaused requires a wait for a decode slot longer than
+// the body's deadline not to use up the deadline.
+func TestClientBodyDeadlinePaused(t *testing.T) {
+	decodeQueue, err := queue.New(1, queue.Options{MaxWaitingRequests: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	hashAPI := testAPI(t)
+	hashAPI.bodyTimeout = testBodyTimeout
+	hashAPI.hasher.decodeQueue = decodeQueue
+
+	// Closed after the test's connections, since Close waits for their requests.
+	srv := httptest.NewServer(apiHandler(hashAPI, discardLogger))
+	t.Cleanup(srv.Close)
+
+	release, err := decodeQueue.Acquire(t.Context(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	photo := testimage.GradientJPEG(t, 300, 200)
+	conn := sendPart(t, srv.Listener.Addr().String(), photo, len(photo)/2)
+
+	time.Sleep(3 * testBodyTimeout)
+	release()
+
+	if _, err := conn.Write(photo[len(photo)/2:]); err != nil {
+		t.Fatal(err)
+	}
+
+	resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	b, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("got %d %s, want 200", resp.StatusCode, b)
+	}
+}
+
+// testBodyTimeout is the body deadline of the tests that let it pass.
+const testBodyTimeout = 200 * time.Millisecond
 
 // noiseGIF returns a GIF of random palette indices, larger than maxTestBody so
 // a reader limited to it runs out in the middle of the pixels.
@@ -380,4 +509,32 @@ func noiseGIF(t *testing.T) []byte {
 	}
 
 	return data
+}
+
+// sendPart opens a connection to addr and sends a POST /hash declaring the
+// whole of img but only its first n bytes.
+func sendPart(t *testing.T, addr string, img []byte, n int) net.Conn {
+	t.Helper()
+
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Cleanup(func() {
+		if err := conn.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+
+	if err := conn.SetDeadline(time.Now().Add(10 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+
+	fmt.Fprintf(conn, "POST /hash HTTP/1.1\r\nHost: blurb\r\nContent-Length: %d\r\n\r\n", len(img))
+	if _, err := conn.Write(img[:n]); err != nil {
+		t.Fatal(err)
+	}
+
+	return conn
 }

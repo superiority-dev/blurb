@@ -34,6 +34,11 @@ type Config struct {
 	// MaxBodyBytes bounds the body POST /hash accepts.
 	MaxBodyBytes int64
 
+	// BodyTimeout bounds the time to read the body of POST /hash, which the
+	// decode reads as it goes; a wait for a decode slot does not count. It
+	// must be positive.
+	BodyTimeout time.Duration
+
 	// PathPrefix, such as /v1, is prepended to /hash but not to the probes.
 	PathPrefix string
 

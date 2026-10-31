@@ -3,8 +3,10 @@ package httpapi
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
+	"os"
 	"syscall"
 	"testing"
 
@@ -57,6 +59,14 @@ func TestClassify(t *testing.T) {
 			status:  http.StatusRequestEntityTooLarge,
 			code:    "too_large",
 			message: "the image header is too large",
+		},
+		{
+			name: "decode of a request body past its deadline",
+			err: errors.Join(header.ErrUnreadable, fmt.Errorf("%w: %w", errBodyTimeout,
+				&net.OpError{Op: "read", Net: "tcp", Err: os.ErrDeadlineExceeded})),
+			status:  http.StatusRequestTimeout,
+			code:    "body_timeout",
+			message: "the request body was not read in time",
 		},
 		{
 			name:    "decode of a request body cut short",

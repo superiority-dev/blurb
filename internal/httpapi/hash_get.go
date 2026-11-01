@@ -29,6 +29,13 @@ func (a *api) hashGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	release, err := a.hashQueue.Acquire(r.Context(), 0)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	defer release()
+
 	body, size, err := a.fetcher.Fetch(r.Context(), rawURL)
 	if err != nil {
 		fail(w, err)

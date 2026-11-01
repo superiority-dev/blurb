@@ -54,11 +54,13 @@ type Config struct {
 // NewHandler returns a handler that serves /hash under cfg.PathPrefix and
 // the probes /healthz and /readyz at the root. Every request but a probe is
 // logged to logger, as is any panic it recovers from. /readyz answers 503
-// while ready marks the service not ready.
+// while ready marks the service not ready. hashQueue admits each /hash
+// request before it fetches or reads the image, and decodeQueue admits its
+// decode.
 func NewHandler(
 	cfg Config,
 	fetcher *fetch.Fetcher,
-	decodeQueue *queue.Queue,
+	hashQueue, decodeQueue *queue.Queue,
 	ready *Readiness,
 	logger *slog.Logger,
 ) http.Handler {
@@ -69,7 +71,7 @@ func NewHandler(
 	mux.HandleFunc("GET "+pathReadyz, ready.readyz)
 	mux.Handle(pathHealthz, refuse)
 	mux.Handle(pathReadyz, refuse)
-	mux.Handle("/", apiHandler(newAPI(cfg, fetcher, decodeQueue), logger))
+	mux.Handle("/", apiHandler(newAPI(cfg, fetcher, hashQueue, decodeQueue), logger))
 
 	return mux
 }

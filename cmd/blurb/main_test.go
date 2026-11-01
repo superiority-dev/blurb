@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -8,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"math"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -239,6 +241,104 @@ func TestRunDrains(t *testing.T) {
 	if resp.StatusCode != http.StatusOK || cc != "public, max-age=3600, immutable" {
 		t.Errorf("in-flight request: %d, Cache-Control %q; want 200 cached for an hour", resp.StatusCode, cc)
 	}
+
+	if err := <-done; err != nil {
+		t.Errorf("run: %v", err)
+	}
+}
+
+// TestRunBusy requires as many POSTs to be served at once as the decode queue
+// can hold, and one more to answer 503 at once.
+func TestRunBusy(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	logs := make(lines, 64)
+	done := make(chan error, 1)
+
+	go func() {
+		done <- run(ctx, nil, testenv.Lookup(
+			"BLURB_ADDR", "127.0.0.1:0",
+			"BLURB_ALLOWED_HOSTS", "images.example.com",
+			"BLURB_MAX_CONCURRENT_DECODES", "1",
+			"BLURB_MAX_WAITING_REQUESTS", "1",
+			"BLURB_QUEUE_TIMEOUT", "1s",
+		), logs)
+	}()
+
+	addr, _ := listening(t, logs, done)
+	photo := testimage.GradientJPEG(t, 64, 48)
+
+	// A held POST gets its 100 Continue once its handler reads the body.
+	var held []net.Conn
+
+	for i := range 2 {
+		conn, err := net.Dial("tcp", addr)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		t.Cleanup(func() {
+			if err := conn.Close(); err != nil {
+				t.Error(err)
+			}
+		})
+
+		fmt.Fprintf(conn, "POST /hash HTTP/1.1\r\nHost: blurb\r\nContent-Type: image/jpeg\r\n"+
+			"Content-Length: %d\r\nExpect: 100-continue\r\n\r\n", len(photo))
+
+		resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _ = io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+
+		if resp.StatusCode != http.StatusContinue {
+			t.Fatalf("POST %d: got %d, want 100", i+1, resp.StatusCode)
+		}
+
+		held = append(held, conn)
+	}
+
+	resp, err := http.Post("http://"+addr+"/hash", "image/jpeg", bytes.NewReader(photo))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var res struct {
+		Error struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+
+	_ = json.NewDecoder(resp.Body).Decode(&res)
+	_, _ = io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+
+	const busy = "too many requests are in progress; retry shortly"
+	if resp.StatusCode != http.StatusServiceUnavailable || res.Error.Message != busy {
+		t.Errorf("POST 3: got %d %q, want 503 %q", resp.StatusCode, res.Error.Message, busy)
+	}
+
+	for i, conn := range held {
+		if _, err := conn.Write(photo); err != nil {
+			t.Fatal(err)
+		}
+
+		resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _ = io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("POST %d: got %d, want 200", i+1, resp.StatusCode)
+		}
+	}
+
+	cancel()
 
 	if err := <-done; err != nil {
 		t.Errorf("run: %v", err)

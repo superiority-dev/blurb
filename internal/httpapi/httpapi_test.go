@@ -21,7 +21,14 @@ import (
 func TestNewHandler(t *testing.T) {
 	logger, logs := jsonLogger()
 	hashAPI := testAPI(t)
-	h := NewHandler(testConfig(), hashAPI.fetcher, hashAPI.hasher.decodeQueue, testReady(), logger)
+	h := NewHandler(
+		testConfig(),
+		hashAPI.fetcher,
+		hashAPI.hashQueue,
+		hashAPI.hasher.decodeQueue,
+		testReady(),
+		logger,
+	)
 
 	for _, rt := range apiRoutes {
 		checkRoute(t, h, rt)
@@ -44,7 +51,14 @@ func TestNewHandlerConfig(t *testing.T) {
 	cfg := testConfig()
 	cfg.PathPrefix = "/v1"
 	cfg.RequestIDHeader = "X-Amz-Cf-Id"
-	h := NewHandler(cfg, hashAPI.fetcher, hashAPI.hasher.decodeQueue, testReady(), discardLogger)
+	h := NewHandler(
+		cfg,
+		hashAPI.fetcher,
+		hashAPI.hashQueue,
+		hashAPI.hasher.decodeQueue,
+		testReady(),
+		discardLogger,
+	)
 
 	for _, rt := range prefixedRoutes {
 		checkRoute(t, h, rt)
@@ -70,7 +84,14 @@ func TestNewHandlerConfig(t *testing.T) {
 func TestReadiness(t *testing.T) {
 	hashAPI := testAPI(t)
 	ready := &Readiness{}
-	h := NewHandler(testConfig(), hashAPI.fetcher, hashAPI.hasher.decodeQueue, ready, discardLogger)
+	h := NewHandler(
+		testConfig(),
+		hashAPI.fetcher,
+		hashAPI.hashQueue,
+		hashAPI.hasher.decodeQueue,
+		ready,
+		discardLogger,
+	)
 
 	cases := []struct {
 		ready  bool
@@ -162,12 +183,17 @@ func testAPI(t testing.TB) *api {
 		t.Fatal(err)
 	}
 
+	hashQueue, err := queue.New(2, queue.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	decodeQueue, err := queue.New(2, queue.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	return newAPI(testConfig(), fetcher, decodeQueue)
+	return newAPI(testConfig(), fetcher, hashQueue, decodeQueue)
 }
 
 func testConfig() Config {

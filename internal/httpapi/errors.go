@@ -123,7 +123,7 @@ func classify(err error) (status int, code, message string) {
 	case errors.Is(err, queue.ErrTimeout):
 		return http.StatusServiceUnavailable, codeUnavailable, "the request waited too long for a decode; retry shortly"
 	case errors.Is(err, queue.ErrBusy):
-		return http.StatusServiceUnavailable, codeUnavailable, "too many requests are waiting; retry shortly"
+		return http.StatusServiceUnavailable, codeUnavailable, "too many requests are in progress; retry shortly"
 	case errors.Is(err, context.Canceled):
 		return http.StatusServiceUnavailable, codeUnavailable, "the request ended before it was served"
 	case errors.As(err, &transport):

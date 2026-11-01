@@ -121,7 +121,13 @@ func run(ctx context.Context, args []string, lookup func(string) (string, bool),
 
 	decodeQueue, err := queue.New(decodeLimits.MaxConcurrentDecodes, queueOpts)
 	if err != nil {
-		return fmt.Errorf("queue: %w", err)
+		return fmt.Errorf("decode queue: %w", err)
+	}
+
+	// As many requests may be hashed at once as the decode queue can hold.
+	hashQueue, err := queue.New(decodeLimits.MaxConcurrentDecodes+decodeLimits.MaxWaitingRequests, queue.Options{})
+	if err != nil {
+		return fmt.Errorf("hash queue: %w", err)
 	}
 
 	fetcher, err := fetch.New(cfg.FetchTimeout, cfg.MaxDownloadBytes, fetch.Options{
@@ -152,6 +158,7 @@ func run(ctx context.Context, args []string, lookup func(string) (string, bool),
 			RequestIDHeader: cfg.RequestIDHeader,
 		},
 		fetcher,
+		hashQueue,
 		decodeQueue,
 		ready,
 		logger,

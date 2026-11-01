@@ -28,10 +28,11 @@ type api struct {
 	bodyTimeout     time.Duration
 	maxAge          time.Duration
 	fetcher         *fetch.Fetcher
+	hashQueue       *queue.Queue
 	hasher          hasher
 }
 
-func newAPI(cfg Config, fetcher *fetch.Fetcher, decodeQueue *queue.Queue) *api {
+func newAPI(cfg Config, fetcher *fetch.Fetcher, hashQueue, decodeQueue *queue.Queue) *api {
 	return &api{
 		pathPrefix:      cfg.PathPrefix,
 		requestIDHeader: cfg.RequestIDHeader,
@@ -39,6 +40,7 @@ func newAPI(cfg Config, fetcher *fetch.Fetcher, decodeQueue *queue.Queue) *api {
 		bodyTimeout:     cfg.BodyTimeout,
 		maxAge:          cfg.MaxAge,
 		fetcher:         fetcher,
+		hashQueue:       hashQueue,
 		hasher: hasher{
 			maxPixels:   cfg.MaxPixels,
 			xComponents: cfg.XComponents,

@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -228,6 +229,59 @@ func TestHashGetQueueWait(t *testing.T) {
 
 	if code := <-posted; code != http.StatusOK {
 		t.Errorf("POST answered %d, want 200", code)
+	}
+}
+
+// TestHashGetBusy requires a GET to hold its hash-queue place while it
+// fetches, a GET to answer 503 without fetching while the queue is full, and
+// each request to give its place back.
+func TestHashGetBusy(t *testing.T) {
+	photo := testimage.GradientJPEG(t, 300, 200)
+	entered, unblock := make(chan struct{}), make(chan struct{})
+
+	var fetches atomic.Int32
+
+	// The first fetch waits for unblock; every later one answers at once.
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if fetches.Add(1) == 1 {
+			close(entered)
+			<-unblock
+		}
+		fmt.Fprintf(w, "%s", photo)
+	}))
+	defer origin.Close()
+
+	hashAPI := testAPI(t)
+
+	var err error
+	hashAPI.hashQueue, err = queue.New(1, queue.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	h := apiHandler(hashAPI, discardLogger)
+	target := "/hash?url=" + url.QueryEscape(origin.URL+"/photo.jpg")
+
+	first := make(chan *httptest.ResponseRecorder, 1)
+	go func() { first <- serve(h, http.MethodGet, target, nil) }()
+
+	<-entered
+
+	rec := serve(h, http.MethodGet, target, nil)
+	if n := fetches.Load(); rec.Code != http.StatusServiceUnavailable || n != 1 {
+		t.Errorf("while full: got %d %s after %d fetches, want 503 after 1", rec.Code, rec.Body.String(), n)
+	}
+
+	close(unblock)
+
+	if rec := <-first; rec.Code != http.StatusOK {
+		t.Errorf("held request: got %d %s, want 200", rec.Code, rec.Body.String())
+	}
+
+	for i := range 2 {
+		if rec := serve(h, http.MethodGet, target, nil); rec.Code != http.StatusOK {
+			t.Errorf("request %d after the release: got %d %s, want 200", i+1, rec.Code, rec.Body.String())
+		}
 	}
 }
 

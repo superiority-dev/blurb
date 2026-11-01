@@ -31,6 +31,13 @@ func (a *api) hashPost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	release, err := a.hashQueue.Acquire(r.Context(), 0)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	defer release()
+
 	body := newClientBody(w, r, a.maxBodyBytes, a.bodyTimeout)
 
 	res, err := a.hasher.hash(r.Context(), body, r.ContentLength, formats, extras)

@@ -185,7 +185,7 @@ func TestClassify(t *testing.T) {
 			err:     queue.ErrBusy,
 			status:  http.StatusServiceUnavailable,
 			code:    "unavailable",
-			message: "too many requests are waiting; retry shortly",
+			message: "too many requests are in progress; retry shortly",
 		},
 		{
 			name:    "request ended",

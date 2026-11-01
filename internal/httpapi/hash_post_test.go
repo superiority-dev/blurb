@@ -226,6 +226,38 @@ func TestHashPostLimits(t *testing.T) {
 	}
 }
 
+// TestHashPostBusy requires a POST to answer 503 before reading its body while
+// the hash queue is full, and each request to give its place back.
+func TestHashPostBusy(t *testing.T) {
+	hashAPI := testAPI(t)
+
+	var err error
+	hashAPI.hashQueue, err = queue.New(1, queue.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	h := apiHandler(hashAPI, discardLogger)
+
+	release, err := hashAPI.hashQueue.Acquire(t.Context(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if rec := serve(h, http.MethodPost, "/hash", []byte("not an image")); rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("while full: got %d %s, want 503", rec.Code, rec.Body.String())
+	}
+
+	release()
+
+	photo := testimage.GradientJPEG(t, 300, 200)
+	for i := range 2 {
+		if rec := serve(h, http.MethodPost, "/hash", photo); rec.Code != http.StatusOK {
+			t.Errorf("request %d after the release: got %d %s, want 200", i+1, rec.Code, rec.Body.String())
+		}
+	}
+}
+
 // TestHashPostReset requires a POST whose client resets the connection
 // mid-body to be logged as a 503 at info.
 func TestHashPostReset(t *testing.T) {
@@ -346,7 +378,14 @@ func FuzzHashPost(f *testing.F) {
 	f.Add("extras=%zz", []byte("not an image"))
 
 	hashAPI := testAPI(f)
-	h := NewHandler(testConfig(), hashAPI.fetcher, hashAPI.hasher.decodeQueue, testReady(), discardLogger)
+	h := NewHandler(
+		testConfig(),
+		hashAPI.fetcher,
+		hashAPI.hashQueue,
+		hashAPI.hasher.decodeQueue,
+		testReady(),
+		discardLogger,
+	)
 
 	f.Fuzz(func(t *testing.T, query string, body []byte) {
 		r := httptest.NewRequest(http.MethodPost, "/hash", bytes.NewReader(body))

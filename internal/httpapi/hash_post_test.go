@@ -11,10 +11,8 @@ import (
 	"errors"
 	"fmt"
 	"image"
-	"image/color/palette"
 	"io"
 	"log/slog"
-	"math/rand/v2"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -24,6 +22,8 @@ import (
 	"testing"
 	"testing/iotest"
 	"time"
+
+	"go.opentelemetry.io/otel/metric/noop"
 
 	"github.com/superiority-dev/blurb/internal/queue"
 	"github.com/superiority-dev/blurb/internal/testimage"
@@ -378,14 +378,18 @@ func FuzzHashPost(f *testing.F) {
 	f.Add("extras=%zz", []byte("not an image"))
 
 	hashAPI := testAPI(f)
-	h := NewHandler(
+	h, err := NewHandler(
 		testConfig(),
 		hashAPI.fetcher,
 		hashAPI.hashQueue,
 		hashAPI.hasher.decodeQueue,
 		testReady(),
 		discardLogger,
+		noop.NewMeterProvider(),
 	)
+	if err != nil {
+		f.Fatal(err)
+	}
 
 	f.Fuzz(func(t *testing.T, query string, body []byte) {
 		r := httptest.NewRequest(http.MethodPost, "/hash", bytes.NewReader(body))
@@ -464,7 +468,8 @@ func TestClientBodyDeadline(t *testing.T) {
 			hashAPI.bodyTimeout = testBodyTimeout
 			hashAPI.hasher.decodeQueue = decodeQueue
 
-			// Closed after the test's connections, since Close waits for their requests.
+			// Closed after the test's connections, since Close waits for
+			// their requests.
 			srv := httptest.NewServer(apiHandler(hashAPI, discardLogger))
 			t.Cleanup(srv.Close)
 
@@ -524,7 +529,8 @@ func TestClientBodyDeadlinePaused(t *testing.T) {
 	hashAPI.bodyTimeout = testBodyTimeout
 	hashAPI.hasher.decodeQueue = decodeQueue
 
-	// Closed after the test's connections, since Close waits for their requests.
+	// Closed after the test's connections, since Close waits for their
+	// requests.
 	srv := httptest.NewServer(apiHandler(hashAPI, discardLogger))
 	t.Cleanup(srv.Close)
 
@@ -558,26 +564,6 @@ func TestClientBodyDeadlinePaused(t *testing.T) {
 
 // testBodyTimeout is the body deadline of the tests that let it pass.
 const testBodyTimeout = 200 * time.Millisecond
-
-// noiseGIF returns a GIF of random palette indices, larger than maxTestBody so
-// a reader limited to it runs out in the middle of the pixels.
-func noiseGIF(t *testing.T) []byte {
-	t.Helper()
-
-	img := image.NewPaletted(image.Rect(0, 0, 700, 700), palette.Plan9)
-	rng := rand.New(rand.NewPCG(1, 2))
-
-	for i := range img.Pix {
-		img.Pix[i] = uint8(rng.IntN(len(palette.Plan9)))
-	}
-
-	data := testimage.EncodeGIF(t, img)
-	if len(data) <= maxTestBody {
-		t.Fatalf("noise GIF is %d bytes, not over %d", len(data), maxTestBody)
-	}
-
-	return data
-}
 
 // sendPart opens a connection to addr and sends a POST /hash declaring the
 // whole of img but only its first n bytes.

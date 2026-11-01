@@ -33,6 +33,7 @@ func (a *api) hashPost(w http.ResponseWriter, r *http.Request) {
 
 	release, err := a.hashQueue.Acquire(r.Context(), 0)
 	if err != nil {
+		a.hasher.metrics.refuse(r.Context(), queueHash, err)
 		fail(w, err)
 		return
 	}

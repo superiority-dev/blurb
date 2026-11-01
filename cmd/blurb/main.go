@@ -21,6 +21,7 @@ import (
 	"github.com/superiority-dev/blurb/internal/config"
 	"github.com/superiority-dev/blurb/internal/fetch"
 	"github.com/superiority-dev/blurb/internal/httpapi"
+	"github.com/superiority-dev/blurb/internal/obs"
 	"github.com/superiority-dev/blurb/internal/queue"
 )
 
@@ -33,6 +34,9 @@ const versionFlag = "version"
 const softMemoryLimitHeadroomPercent = 10
 
 const unknown = "unknown"
+
+// logKeyError is the key of the error in a log line.
+const logKeyError = "error"
 
 // Build details, each set at link time with -ldflags "-X main.NAME=VALUE".
 var (
@@ -66,7 +70,7 @@ func run(ctx context.Context, args []string, lookup func(string) (string, bool),
 
 	defer func() {
 		if err != nil {
-			logger.Error("exiting", slog.Any("error", err))
+			logger.Error("exiting", slog.Any(logKeyError, err))
 		}
 	}()
 
@@ -145,8 +149,13 @@ func run(ctx context.Context, args []string, lookup func(string) (string, bool),
 			slog.Bool("private_addresses_allowed", cfg.AllowPrivateAddresses))
 	}
 
+	meters, shutdownMetrics, err := obs.Setup(ctx, lookup, version)
+	if err != nil {
+		return err
+	}
+
 	ready := &httpapi.Readiness{}
-	handler := httpapi.NewHandler(
+	handler, err := httpapi.NewHandler(
 		httpapi.Config{
 			MaxPixels:       cfg.MaxPixels,
 			XComponents:     cfg.XComponents,
@@ -162,7 +171,11 @@ func run(ctx context.Context, args []string, lookup func(string) (string, bool),
 		decodeQueue,
 		ready,
 		logger,
+		meters,
 	)
+	if err != nil {
+		return err
+	}
 
 	ln, err := net.Listen("tcp", cfg.Addr)
 	if err != nil {
@@ -192,6 +205,10 @@ func run(ctx context.Context, args []string, lookup func(string) (string, bool),
 
 	if err := errors.Join(serveErr, server.Shutdown(shutdownCtx)); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err
+	}
+
+	if err := shutdownMetrics(shutdownCtx); err != nil {
+		logger.Warn("metrics not flushed", slog.Any(logKeyError, err))
 	}
 
 	logger.Info("stopped")

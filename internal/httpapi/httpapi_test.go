@@ -4,16 +4,22 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"image"
+	"image/color/palette"
 	"io"
 	"log/slog"
+	"math/rand/v2"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
+	"go.opentelemetry.io/otel/metric/noop"
+
 	"github.com/superiority-dev/blurb/internal/fetch"
 	"github.com/superiority-dev/blurb/internal/queue"
+	"github.com/superiority-dev/blurb/internal/testimage"
 )
 
 // TestNewHandler requires one handler to serve the API's routes and the probes,
@@ -21,14 +27,18 @@ import (
 func TestNewHandler(t *testing.T) {
 	logger, logs := jsonLogger()
 	hashAPI := testAPI(t)
-	h := NewHandler(
+	h, err := NewHandler(
 		testConfig(),
 		hashAPI.fetcher,
 		hashAPI.hashQueue,
 		hashAPI.hasher.decodeQueue,
 		testReady(),
 		logger,
+		noop.NewMeterProvider(),
 	)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	for _, rt := range apiRoutes {
 		checkRoute(t, h, rt)
@@ -51,14 +61,18 @@ func TestNewHandlerConfig(t *testing.T) {
 	cfg := testConfig()
 	cfg.PathPrefix = "/v1"
 	cfg.RequestIDHeader = "X-Amz-Cf-Id"
-	h := NewHandler(
+	h, err := NewHandler(
 		cfg,
 		hashAPI.fetcher,
 		hashAPI.hashQueue,
 		hashAPI.hasher.decodeQueue,
 		testReady(),
 		discardLogger,
+		noop.NewMeterProvider(),
 	)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	for _, rt := range prefixedRoutes {
 		checkRoute(t, h, rt)
@@ -84,14 +98,18 @@ func TestNewHandlerConfig(t *testing.T) {
 func TestReadiness(t *testing.T) {
 	hashAPI := testAPI(t)
 	ready := &Readiness{}
-	h := NewHandler(
+	h, err := NewHandler(
 		testConfig(),
 		hashAPI.fetcher,
 		hashAPI.hashQueue,
 		hashAPI.hasher.decodeQueue,
 		ready,
 		discardLogger,
+		noop.NewMeterProvider(),
 	)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	cases := []struct {
 		ready  bool
@@ -193,7 +211,12 @@ func testAPI(t testing.TB) *api {
 		t.Fatal(err)
 	}
 
-	return newAPI(testConfig(), fetcher, hashQueue, decodeQueue)
+	instruments, err := newMetrics(noop.Meter{}, hashQueue, decodeQueue)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return newAPI(testConfig(), fetcher, hashQueue, decodeQueue, instruments)
 }
 
 func testConfig() Config {
@@ -436,4 +459,24 @@ func checkRoute(t *testing.T, h http.Handler, rt route) {
 	if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
 		t.Errorf("%s %s: Content-Type %q", rt.method, rt.path, ct)
 	}
+}
+
+// noiseGIF returns a GIF of random palette indices, larger than maxTestBody so
+// a reader limited to it runs out in the middle of the pixels.
+func noiseGIF(t *testing.T) []byte {
+	t.Helper()
+
+	img := image.NewPaletted(image.Rect(0, 0, 700, 700), palette.Plan9)
+	rng := rand.New(rand.NewPCG(1, 2))
+
+	for i := range img.Pix {
+		img.Pix[i] = uint8(rng.IntN(len(palette.Plan9)))
+	}
+
+	data := testimage.EncodeGIF(t, img)
+	if len(data) <= maxTestBody {
+		t.Fatalf("noise GIF is %d bytes, not over %d", len(data), maxTestBody)
+	}
+
+	return data
 }

@@ -10,6 +10,8 @@ import (
 	"testing/synctest"
 	"time"
 
+	"go.opentelemetry.io/otel/metric/noop"
+
 	"github.com/superiority-dev/blurb/internal/header"
 	"github.com/superiority-dev/blurb/internal/queue"
 	"github.com/superiority-dev/blurb/internal/testimage"
@@ -32,12 +34,17 @@ func TestHasherDecode(t *testing.T) {
 			t.Fatal(err)
 		}
 
+		instruments, err := newMetrics(noop.Meter{}, decodeQueue, decodeQueue)
+		if err != nil {
+			t.Fatal(err)
+		}
+
 		body := &deadlineCounter{}
 		rest := bytes.NewReader(testimage.GradientJPEG(t, 50, 40))
 		done := make(chan error, 1)
 
 		go func() {
-			_, _, err := (&hasher{decodeQueue: decodeQueue}).decode(
+			_, _, err := (&hasher{decodeQueue: decodeQueue, metrics: instruments}).decode(
 				ctx,
 				body,
 				header.Info{Orientation: header.OrientationNormal},

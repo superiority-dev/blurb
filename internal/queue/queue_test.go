@@ -338,6 +338,53 @@ func TestAcquireCancelGranted(t *testing.T) {
 }
 
 // newQueue returns [New]'s [Queue] and fails t on an error.
+// TestStats requires the counts to follow each admission, wait and release,
+// and the bytes to stay 0 without a memory bound.
+func TestStats(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+
+		queue := newQueue(t, 2, Options{MaxWaitingRequests: 1, MaxMemoryBytes: 100})
+
+		releaseFirst, err := queue.Acquire(ctx, 30)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if _, err := queue.Acquire(ctx, 50); err != nil {
+			t.Fatal(err)
+		}
+
+		if got, want := queue.Stats(), (Stats{Running: 2, Bytes: 80, MaxBytes: 100}); got != want {
+			t.Errorf("two running: got %+v, want %+v", got, want)
+		}
+
+		go func() { _, _ = queue.Acquire(ctx, 10) }()
+		synctest.Wait()
+
+		if got, want := queue.Stats(), (Stats{Running: 2, Waiting: 1, Bytes: 80, MaxBytes: 100}); got != want {
+			t.Errorf("one waiting: got %+v, want %+v", got, want)
+		}
+
+		releaseFirst()
+		synctest.Wait()
+
+		if got, want := queue.Stats(), (Stats{Running: 2, Bytes: 60, MaxBytes: 100}); got != want {
+			t.Errorf("after a release: got %+v, want %+v", got, want)
+		}
+
+		unbounded := newQueue(t, 1, Options{})
+		if _, err := unbounded.Acquire(ctx, 40); err != nil {
+			t.Fatal(err)
+		}
+
+		if got, want := unbounded.Stats(), (Stats{Running: 1}); got != want {
+			t.Errorf("no memory bound: got %+v, want %+v", got, want)
+		}
+	})
+}
+
 func newQueue(t *testing.T, concurrency int, opts Options) *Queue {
 	t.Helper()
 

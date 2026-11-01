@@ -43,12 +43,25 @@ type Options struct {
 // Queue must be created with [New].
 type Queue struct {
 	mu                 sync.Mutex
+	concurrency        int
 	slots              int
 	bytes              int64
 	capacity           int64
 	maxWaitingRequests int
 	timeout            time.Duration
 	waiting            list.List
+}
+
+// Stats holds a [Queue]'s counts.
+type Stats struct {
+	Running, Waiting int
+
+	// Bytes is the memory the running requests are estimated to need
+	// together, 0 when [Options.MaxMemoryBytes] is 0.
+	Bytes int64
+
+	// MaxBytes is the [Options.MaxMemoryBytes] the queue was created with.
+	MaxBytes int64
 }
 
 type waiter struct {
@@ -73,6 +86,7 @@ func New(concurrency int, opts Options) (*Queue, error) {
 	}
 
 	return &Queue{
+		concurrency:        concurrency,
 		slots:              concurrency,
 		bytes:              opts.MaxMemoryBytes,
 		capacity:           opts.MaxMemoryBytes,
@@ -125,6 +139,19 @@ func (q *Queue) Acquire(ctx context.Context, n int64) (release func(), err error
 		return nil, q.leave(e, n, ctx.Err())
 	case <-expired:
 		return nil, q.leave(e, n, ErrTimeout)
+	}
+}
+
+// Stats returns what q has admitted and what waits, at the moment of the call.
+func (q *Queue) Stats() Stats {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	return Stats{
+		Running:  q.concurrency - q.slots,
+		Waiting:  q.waiting.Len(),
+		Bytes:    q.capacity - q.bytes,
+		MaxBytes: q.capacity,
 	}
 }
 

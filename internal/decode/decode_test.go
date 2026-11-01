@@ -281,7 +281,8 @@ func FuzzSmall(f *testing.F) {
 			return
 		}
 
-		// The shorter side is within a pixel of what the source's aspect ratio gives.
+		// The shorter side is within a pixel of what the source's aspect ratio
+		// gives.
 		got := small.Bounds()
 		skew := got.Dx()*info.Height - got.Dy()*info.Width
 		if got.Min != (image.Point{}) || max(got.Dx(), got.Dy()) != maxSide ||

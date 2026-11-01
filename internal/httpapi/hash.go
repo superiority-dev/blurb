@@ -9,6 +9,9 @@ import (
 	"image"
 	"image/color"
 	"io"
+	"time"
+
+	"go.opentelemetry.io/otel/metric"
 
 	"github.com/superiority-dev/blurb/internal/colors"
 	"github.com/superiority-dev/blurb/internal/decode"
@@ -32,6 +35,7 @@ type hasher struct {
 	maxPixels                int64
 	xComponents, yComponents int
 	decodeQueue              *queue.Queue
+	metrics                  *metrics
 }
 
 // hash computes what formats and extras ask for from the image in body. size is
@@ -45,6 +49,9 @@ func (h *hasher) hash(
 	formats formatSet,
 	extras extraSet,
 ) (_ hashResponse, err error) {
+	var format header.Format
+	defer func() { h.metrics.result(ctx, format, err) }()
+
 	src := &readers.Sticky{R: body}
 
 	defer func() {
@@ -65,6 +72,8 @@ func (h *hasher) hash(
 	if err != nil {
 		return hashResponse{}, err
 	}
+
+	format = info.Format
 
 	if int64(info.Width)*int64(info.Height) > h.maxPixels {
 		return hashResponse{}, errTooManyPixels
@@ -153,6 +162,9 @@ func (h *hasher) decode(
 		deadline.PauseDeadline()
 	}
 
+	h.metrics.estimate.Record(ctx, info.DecodeBytes, metric.WithAttributes(attrFormat.String(string(info.Format))))
+
+	start := time.Now()
 	release, err := h.decodeQueue.Acquire(ctx, info.DecodeBytes)
 
 	if pausable {
@@ -160,8 +172,11 @@ func (h *hasher) decode(
 	}
 
 	if err != nil {
+		h.metrics.refuse(ctx, queueDecode, err)
 		return nil, false, err
 	}
+
+	h.metrics.wait.Record(ctx, time.Since(start).Seconds())
 	defer release()
 
 	return decode.Small(rest, info)

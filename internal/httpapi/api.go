@@ -32,7 +32,7 @@ type api struct {
 	hasher          hasher
 }
 
-func newAPI(cfg Config, fetcher *fetch.Fetcher, hashQueue, decodeQueue *queue.Queue) *api {
+func newAPI(cfg Config, fetcher *fetch.Fetcher, hashQueue, decodeQueue *queue.Queue, instruments *metrics) *api {
 	return &api{
 		pathPrefix:      cfg.PathPrefix,
 		requestIDHeader: cfg.RequestIDHeader,
@@ -46,6 +46,7 @@ func newAPI(cfg Config, fetcher *fetch.Fetcher, hashQueue, decodeQueue *queue.Qu
 			xComponents: cfg.XComponents,
 			yComponents: cfg.YComponents,
 			decodeQueue: decodeQueue,
+			metrics:     instruments,
 		},
 	}
 }

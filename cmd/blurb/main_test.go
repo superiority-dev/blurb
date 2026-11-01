@@ -345,6 +345,63 @@ func TestRunBusy(t *testing.T) {
 	}
 }
 
+// TestRunMetrics requires the metrics of requests served before a stop to
+// reach the OTLP collector when run returns.
+func TestRunMetrics(t *testing.T) {
+	bodies := make(chan []byte, 8)
+	collector := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		bodies <- b
+	}))
+	defer collector.Close()
+
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", collector.URL)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	logs := make(lines, 64)
+	done := make(chan error, 1)
+
+	go func() {
+		done <- run(ctx, nil, testenv.Lookup(
+			"BLURB_ADDR", "127.0.0.1:0",
+			"BLURB_ALLOWED_HOSTS", "images.example.com",
+			"OTEL_METRICS_EXPORTER", "otlp",
+		), logs)
+	}()
+
+	addr, _ := listening(t, logs, done)
+
+	resp, err := http.Post("http://"+addr+"/hash", "image/jpeg", bytes.NewReader(testimage.GradientJPEG(t, 64, 48)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("POST: got %d, want 200", resp.StatusCode)
+	}
+
+	cancel()
+
+	if err := <-done; err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	var exported []byte
+	for len(bodies) > 0 {
+		exported = append(exported, <-bodies...)
+	}
+
+	for _, name := range []string{"blurb.hash.requests", "http.server.request.duration", "go.memory.used"} {
+		if !bytes.Contains(exported, []byte(name)) {
+			t.Errorf("the collector got no %s", name)
+		}
+	}
+}
+
 // TestRunAllowAll requires a warning when the allowlist is *.
 func TestRunAllowAll(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -401,6 +458,13 @@ func TestRunErrors(t *testing.T) {
 		{
 			env:  []string{"BLURB_ADDR", "127.0.0.1:99999", "BLURB_ALLOWED_HOSTS", "*", "BLURB_LOG_LEVEL", "error"},
 			want: "invalid port",
+		},
+		{
+			env: []string{
+				"BLURB_ALLOWED_HOSTS", "*", "BLURB_LOG_LEVEL", "error",
+				"OTEL_METRICS_EXPORTER", "prometheus",
+			},
+			want: `OTEL_METRICS_EXPORTER must be otlp or none, got "prometheus"`,
 		},
 	}
 

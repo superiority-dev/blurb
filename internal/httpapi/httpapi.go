@@ -9,6 +9,9 @@ import (
 	"net/http"
 	"time"
 
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+	"go.opentelemetry.io/otel/metric"
+
 	"github.com/superiority-dev/blurb/internal/fetch"
 	"github.com/superiority-dev/blurb/internal/queue"
 )
@@ -17,6 +20,9 @@ const (
 	pathHealthz = "/healthz"
 	pathReadyz  = "/readyz"
 )
+
+// operationHash is the span name otelhttp gives each request the API serves.
+const operationHash = "hash"
 
 // noStore is the maxAge that sends Cache-Control: no-store.
 const noStore time.Duration = 0
@@ -56,14 +62,22 @@ type Config struct {
 // logged to logger, as is any panic it recovers from. /readyz answers 503
 // while ready marks the service not ready. hashQueue admits each /hash
 // request before it fetches or reads the image, and decodeQueue admits its
-// decode.
+// decode. The metrics of every request but a probe, and of both queues, go to
+// meters.
 func NewHandler(
 	cfg Config,
 	fetcher *fetch.Fetcher,
 	hashQueue, decodeQueue *queue.Queue,
 	ready *Readiness,
 	logger *slog.Logger,
-) http.Handler {
+	meters metric.MeterProvider,
+) (http.Handler, error) {
+	instruments, err := newMetrics(meters.Meter(meterName), hashQueue, decodeQueue)
+	if err != nil {
+		return nil, fmt.Errorf("metrics: %w", err)
+	}
+
+	hashAPI := apiHandler(newAPI(cfg, fetcher, hashQueue, decodeQueue, instruments), logger)
 	refuse := methodNotAllowed(http.MethodGet, http.MethodHead)
 
 	mux := http.NewServeMux()
@@ -71,9 +85,9 @@ func NewHandler(
 	mux.HandleFunc("GET "+pathReadyz, ready.readyz)
 	mux.Handle(pathHealthz, refuse)
 	mux.Handle(pathReadyz, refuse)
-	mux.Handle("/", apiHandler(newAPI(cfg, fetcher, hashQueue, decodeQueue), logger))
+	mux.Handle("/", otelhttp.NewHandler(hashAPI, operationHash, otelhttp.WithMeterProvider(meters)))
 
-	return mux
+	return mux, nil
 }
 
 // apiHandler returns a handler that serves /hash under [Config.PathPrefix]

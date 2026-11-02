@@ -21,8 +21,8 @@ import (
 	"github.com/superiority-dev/blurb/internal/config"
 	"github.com/superiority-dev/blurb/internal/fetch"
 	"github.com/superiority-dev/blurb/internal/httpapi"
-	"github.com/superiority-dev/blurb/internal/obs"
 	"github.com/superiority-dev/blurb/internal/queue"
+	"github.com/superiority-dev/blurb/internal/telemetry"
 )
 
 const readHeaderTimeout = 10 * time.Second
@@ -149,7 +149,7 @@ func run(ctx context.Context, args []string, lookup func(string) (string, bool),
 			slog.Bool("private_addresses_allowed", cfg.AllowPrivateAddresses))
 	}
 
-	meters, shutdownMetrics, err := obs.Setup(ctx, lookup, version)
+	meters, shutdownMetrics, err := telemetry.Setup(ctx, lookup, version)
 	if err != nil {
 		return err
 	}

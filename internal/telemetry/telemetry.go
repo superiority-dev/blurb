@@ -1,6 +1,6 @@
-// Package obs sets up the meter provider that blurb's metrics are exported
-// through.
-package obs
+// Package telemetry sets up the meter provider that blurb's metrics are
+// exported through.
+package telemetry
 
 import (
 	"context"

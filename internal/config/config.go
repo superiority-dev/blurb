@@ -59,8 +59,8 @@ type Config struct {
 	AllowPrivateAddresses bool
 
 	// FetchTimeout is the time limit for each fetch, including connection
-	// time, any redirects and reading the body, and for reading each POST
-	// body, but not a wait for a decode slot.
+	// time, any redirects and the time its body's reads wait on the origin,
+	// and for the reads of each POST body.
 	FetchTimeout time.Duration
 
 	MaxDownloadBytes int64
@@ -122,14 +122,13 @@ func Load(lookup func(string) (string, bool)) (Config, error) {
 // DecodeLimits returns the [DecodeLimits] for a process whose memory limit is
 // memoryLimit bytes, 0 for none, and whose GOMAXPROCS is gomaxprocs.
 func (c Config) DecodeLimits(memoryLimit int64, gomaxprocs int) DecodeLimits {
-	// Divide by 100 first so memoryLimit times the percent cannot overflow.
-	headroom := memoryLimit/100*memoryLimitHeadroomPercent + memoryLimit%100*memoryLimitHeadroomPercent/100
-
 	limits := DecodeLimits{
-		MaxMemoryBytes:       memoryLimit - headroom,
+		MaxMemoryBytes:       lessPercent(memoryLimit, memoryLimitHeadroomPercent),
 		MaxConcurrentDecodes: c.MaxConcurrentDecodes,
 		MaxWaitingRequests:   c.MaxWaitingRequests,
 	}
+	limits.CollectAboveBytes = (memoryLimit - limits.MaxMemoryBytes) / 2
+
 	if limits.MaxConcurrentDecodes == 0 {
 		limits.MaxConcurrentDecodes = gomaxprocs
 	}
@@ -147,6 +146,17 @@ type DecodeLimits struct {
 	// MaxMemoryBytes of 0 means no bound.
 	MaxMemoryBytes int64
 
+	// CollectAboveBytes is half the part of the memory limit kept for
+	// everything but decodes, 0 when there is no limit, so that decode
+	// garbage takes at most half of that part.
+	CollectAboveBytes int64
+
 	MaxConcurrentDecodes int
 	MaxWaitingRequests   int
+}
+
+// lessPercent returns n less the given percent of it, dividing by 100 first
+// so n times percent cannot overflow.
+func lessPercent(n, percent int64) int64 {
+	return n - (n/100*percent + n%100*percent/100)
 }

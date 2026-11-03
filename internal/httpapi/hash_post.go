@@ -14,13 +14,7 @@ import (
 func (a *api) hashPost(w http.ResponseWriter, r *http.Request) {
 	values := r.URL.Query()
 
-	formats, err := parseFormats(values)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, codeBadRequest, err.Error())
-		return
-	}
-
-	extras, err := parseExtras(values)
+	formats, extras, err := parseOptions(values)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, codeBadRequest, err.Error())
 		return
@@ -51,32 +45,34 @@ func (a *api) hashPost(w http.ResponseWriter, r *http.Request) {
 }
 
 // clientBody is a request body read under one deadline for the whole body,
-// which stops while the request waits for a decode. Its read errors also match
+// which runs only inside its reads. Its read errors also match
 // errBodyTimeout when the deadline passes, [context.Canceled] for any other
 // network error, errBodyCut when the body ends early, and errBodyMalformed for
 // any other error but an [*http.MaxBytesError].
 type clientBody struct {
 	r    io.Reader
 	rc   *http.ResponseController
-	end  time.Time     // the connection's read deadline
-	left time.Duration // what remained at the last pause
+	left time.Duration // what remains of the deadline
 }
 
-// newClientBody returns r's body, limited to maxBytes, with its deadline
-// timeout from now.
+// newClientBody returns r's body, limited to maxBytes, with a deadline of
+// timeout.
 func newClientBody(w http.ResponseWriter, r *http.Request, maxBytes int64, timeout time.Duration) *clientBody {
-	c := &clientBody{
-		r:   http.MaxBytesReader(w, r.Body, maxBytes),
-		rc:  http.NewResponseController(w),
-		end: time.Now().Add(timeout),
+	return &clientBody{
+		r:    http.MaxBytesReader(w, r.Body, maxBytes),
+		rc:   http.NewResponseController(w),
+		left: timeout,
 	}
-	c.setDeadline()
-
-	return c
 }
 
+// Read sets the connection's read deadline to now plus the time the body has
+// left. A writer that cannot set one leaves the body without a deadline.
 func (c *clientBody) Read(p []byte) (int, error) {
+	end := time.Now().Add(c.left)
+	_ = c.rc.SetReadDeadline(end)
 	n, err := c.r.Read(p)
+	c.left = time.Until(end)
+
 	if err == nil || err == io.EOF {
 		return n, err
 	}
@@ -95,22 +91,4 @@ func (c *clientBody) Read(p []byte) (int, error) {
 	}
 
 	return n, fmt.Errorf("%w: %w", class, err)
-}
-
-// PauseDeadline stops the deadline until [clientBody.ResumeDeadline]. Nothing
-// reads the body meanwhile, so the connection's deadline is left as it is.
-func (c *clientBody) PauseDeadline() {
-	c.left = time.Until(c.end)
-}
-
-// ResumeDeadline restarts the deadline with what remained at the pause.
-func (c *clientBody) ResumeDeadline() {
-	c.end = time.Now().Add(c.left)
-	c.setDeadline()
-}
-
-// setDeadline sets the connection's read deadline to end. A writer that
-// cannot set one leaves the body without a deadline.
-func (c *clientBody) setDeadline() {
-	_ = c.rc.SetReadDeadline(c.end)
 }

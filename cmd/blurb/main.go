@@ -31,8 +31,6 @@ const idleTimeout = 2 * time.Minute
 
 const versionFlag = "version"
 
-const softMemoryLimitHeadroomPercent = 10
-
 const unknown = "unknown"
 
 // logKeyError is the key of the error in a log line.
@@ -98,7 +96,7 @@ func run(ctx context.Context, args []string, lookup func(string) (string, bool),
 	decodeLimits := cfg.DecodeLimits(limit, runtime.GOMAXPROCS(0))
 
 	soft := debug.SetMemoryLimit(-1)
-	if softToSet := softLimit(limit, limitSource); softToSet > 0 {
+	if softToSet := config.SoftMemoryLimit(limit, limitSource); softToSet > 0 {
 		soft = softToSet
 		debug.SetMemoryLimit(soft)
 	}
@@ -107,6 +105,7 @@ func run(ctx context.Context, args []string, lookup func(string) (string, bool),
 		MaxWaitingRequests: decodeLimits.MaxWaitingRequests,
 		Timeout:            cfg.QueueTimeout,
 		MaxMemoryBytes:     decodeLimits.MaxMemoryBytes,
+		CollectAboveBytes:  decodeLimits.CollectAboveBytes,
 	}
 
 	logger.Info("starting",
@@ -116,6 +115,7 @@ func run(ctx context.Context, args []string, lookup func(string) (string, bool),
 		slog.String("memory_limit_source", limitSource),
 		slog.Int64("soft_memory_limit_bytes", soft),
 		slog.Int64("decode_memory_bytes", queueOpts.MaxMemoryBytes),
+		slog.Int64("collect_above_bytes", queueOpts.CollectAboveBytes),
 		slog.Int("max_concurrent_decodes", decodeLimits.MaxConcurrentDecodes),
 		slog.Int("max_waiting_requests", queueOpts.MaxWaitingRequests),
 		slog.Duration("queue_timeout", queueOpts.Timeout),
@@ -203,7 +203,7 @@ func run(ctx context.Context, args []string, lookup func(string) (string, bool),
 	shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cfg.ShutdownTimeout)
 	defer cancel()
 
-	if err := errors.Join(serveErr, server.Shutdown(shutdownCtx)); err != nil && !errors.Is(err, http.ErrServerClosed) {
+	if err := errors.Join(serveErr, server.Shutdown(shutdownCtx)); err != nil {
 		return err
 	}
 
@@ -214,20 +214,6 @@ func run(ctx context.Context, args []string, lookup func(string) (string, bool),
 	logger.Info("stopped")
 
 	return nil
-}
-
-// softLimit returns the soft memory limit to set: limit less
-// softMemoryLimitHeadroomPercent percent. It returns 0, leaving the runtime's
-// soft limit alone, when limit came from GOMEMLIMIT or is 0.
-func softLimit(limit int64, source string) int64 {
-	if source == config.FromGOMEMLIMIT || limit <= 0 {
-		return 0
-	}
-
-	// Split by 100 first so limit times the percent cannot overflow.
-	headroom := limit/100*softMemoryLimitHeadroomPercent + limit%100*softMemoryLimitHeadroomPercent/100
-
-	return limit - headroom
 }
 
 func newServer(h http.Handler, logger *slog.Logger) *http.Server {

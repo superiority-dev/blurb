@@ -3,7 +3,6 @@
 package decode
 
 import (
-	"fmt"
 	"image"
 	"io"
 
@@ -19,11 +18,12 @@ const maxSide = thumbhash.MaxSize
 // Small decodes the image r holds, which [header.Read] returned info for,
 // scaled to fit inside [thumbhash.MaxSize] on a side and turned upright. The
 // alpha result reports whether any of it may be transparent. It returns
-// [header.ErrUnreadable] for an image that does not decode or has no pixels.
+// [header.DecodeError]'s error for an image that does not decode, and
+// [header.ErrUnreadable] for one with no pixels.
 func Small(r io.Reader, info header.Info) (small *image.RGBA, alpha bool, err error) {
 	img, _, err := image.Decode(r)
 	if err != nil {
-		return nil, false, fmt.Errorf("%w: %w", header.ErrUnreadable, err)
+		return nil, false, header.DecodeError(err, info.Format)
 	}
 
 	if img.Bounds().Empty() {

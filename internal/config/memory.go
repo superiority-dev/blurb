@@ -19,6 +19,10 @@ const noCgroupLimit = 1 << 62
 // hierarchy ID, the controllers and the cgroup's path.
 const cgroupFields = 3
 
+// softMemoryLimitHeadroomPercent is the part of the memory limit
+// [SoftMemoryLimit] keeps below it.
+const softMemoryLimitHeadroomPercent = 10
+
 // FromGOMEMLIMIT is the source [MemoryLimit] names when GOMEMLIMIT set the
 // limit.
 const FromGOMEMLIMIT = "GOMEMLIMIT"
@@ -28,6 +32,18 @@ const FromGOMEMLIMIT = "GOMEMLIMIT"
 // [FromGOMEMLIMIT], the cgroup file, or "none".
 func MemoryLimit() (limit int64, source string) {
 	return memoryLimit(debug.SetMemoryLimit(-1), os.DirFS("/"))
+}
+
+// SoftMemoryLimit returns the soft memory limit to set for a memory limit of
+// limit bytes from source: limit less softMemoryLimitHeadroomPercent percent.
+// It returns 0, leaving the runtime's soft limit alone, when limit came from
+// GOMEMLIMIT or is 0.
+func SoftMemoryLimit(limit int64, source string) int64 {
+	if source == FromGOMEMLIMIT {
+		return 0
+	}
+
+	return lessPercent(limit, softMemoryLimitHeadroomPercent)
 }
 
 // memoryLimit is [MemoryLimit] for a runtime limit of gomemlimit bytes. A

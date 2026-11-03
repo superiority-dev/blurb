@@ -35,18 +35,30 @@ func TestExifOrientation(t *testing.T) {
 	pastEnd := testimage.EXIFOrientation(6, binary.LittleEndian)
 	binary.LittleEndian.PutUint32(pastEnd[4:], 1000)
 
+	// IFD0 at offset 4, inside the header, where its entry count reads 4
+	// and its second entry is an orientation.
+	insideHeader := make([]byte, 30)
+	copy(insideHeader, "II*\x00")
+	binary.LittleEndian.PutUint32(insideHeader[4:], 4)
+	binary.LittleEndian.PutUint16(insideHeader[18:], 0x0112)
+	binary.LittleEndian.PutUint16(insideHeader[20:], 3)
+	binary.LittleEndian.PutUint32(insideHeader[22:], 1)
+	binary.LittleEndian.PutUint16(insideHeader[26:], 6)
+
 	refused := map[string][]byte{
-		"value 9":          testimage.EXIFOrientation(9, binary.BigEndian),
-		"not TIFF":         []byte("http://ns.adobe.com/xap/1.0/\x00<x:xmpmeta/>"),
-		"header cut short": testimage.EXIFOrientation(6, binary.BigEndian)[:3:3],
-		"no orientation":   testimage.EXIFMakeOnly(),
-		"cut short":        testimage.EXIFOrientation(6, binary.BigEndian)[:20],
-		"IFD past the end": pastEnd,
-		"a LONG":           testimage.EXIFWithTypeCount(4, 1),
-		"a BYTE":           testimage.EXIFWithTypeCount(1, 1),
-		"an SSHORT":        testimage.EXIFWithTypeCount(8, 1),
-		"a count of two":   testimage.EXIFWithTypeCount(3, 2),
-		"a count of zero":  testimage.EXIFWithTypeCount(3, 0),
+		"value 9":           testimage.EXIFOrientation(9, binary.BigEndian),
+		"not TIFF":          []byte("http://ns.adobe.com/xap/1.0/\x00<x:xmpmeta/>"),
+		"header cut short":  testimage.EXIFOrientation(6, binary.BigEndian)[:3:3],
+		"no orientation":    testimage.EXIFMakeOnly(),
+		"cut short":         testimage.EXIFOrientation(6, binary.BigEndian)[:20],
+		"IFD past the end":  pastEnd,
+		"IFD in the header": insideHeader,
+		"entry cut by one":  testimage.EXIFOrientation(6, binary.BigEndian)[:21],
+		"a LONG":            testimage.EXIFWithTypeCount(4, 1),
+		"a BYTE":            testimage.EXIFWithTypeCount(1, 1),
+		"an SSHORT":         testimage.EXIFWithTypeCount(8, 1),
+		"a count of two":    testimage.EXIFWithTypeCount(3, 2),
+		"a count of zero":   testimage.EXIFWithTypeCount(3, 0),
 	}
 
 	for name, seg := range refused {

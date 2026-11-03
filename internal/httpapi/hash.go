@@ -79,7 +79,7 @@ func (h *hasher) hash(
 		return hashResponse{}, errTooManyPixels
 	}
 
-	small, alpha, err := h.decode(ctx, body, info, rest)
+	small, alpha, err := h.decode(ctx, info, rest)
 	if err != nil {
 		return hashResponse{}, err
 	}
@@ -149,28 +149,17 @@ func (h *hasher) hash(
 	return res, nil
 }
 
-// decode waits for the decode queue, with body's deadline paused if body has
-// one, then decodes the image rest holds with [decode.Small].
+// decode waits for the decode queue, then decodes the image rest holds with
+// [decode.Small].
 func (h *hasher) decode(
 	ctx context.Context,
-	body io.Reader,
 	info header.Info,
 	rest io.Reader,
 ) (small *image.RGBA, alpha bool, err error) {
-	deadline, pausable := body.(pausableDeadline)
-	if pausable {
-		deadline.PauseDeadline()
-	}
-
 	h.metrics.estimate.Record(ctx, info.DecodeBytes, metric.WithAttributes(attrFormat.String(string(info.Format))))
 
 	start := time.Now()
 	release, err := h.decodeQueue.Acquire(ctx, info.DecodeBytes)
-
-	if pausable {
-		deadline.ResumeDeadline()
-	}
-
 	if err != nil {
 		h.metrics.refuse(ctx, queueDecode, err)
 		return nil, false, err
@@ -204,13 +193,6 @@ type hashResponse struct {
 type swatch struct {
 	Color string  `json:"color"`
 	Share float64 `json:"share"`
-}
-
-// pausableDeadline is a body whose deadline can pause: a fetched image's, or
-// a POST body.
-type pausableDeadline interface {
-	PauseDeadline()
-	ResumeDeadline()
 }
 
 // aspect returns width over height rounded to four decimals, halves up,

@@ -162,6 +162,24 @@ func TestHashGetRepeated(t *testing.T) {
 	}
 }
 
+// TestHashGetURLRequired requires a 400 saying url is required when the
+// query has no url or an empty one.
+func TestHashGetURLRequired(t *testing.T) {
+	h := apiHandler(testAPI(t), discardLogger)
+
+	for _, target := range []string{"/hash", "/hash?url=", "/hash?formats=blurhash"} {
+		rec := serve(h, http.MethodGet, target, nil)
+
+		var body errorBody
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil ||
+			rec.Code != http.StatusBadRequest ||
+			body.Error.Code != "bad_request" ||
+			body.Error.Message != "url is required" {
+			t.Errorf("%s: got %d %s, want 400 bad_request, url is required", target, rec.Code, rec.Body.String())
+		}
+	}
+}
+
 // TestHashGetQueueWait requires the wait for a decode slot not to count
 // against the fetch timeout.
 func TestHashGetQueueWait(t *testing.T) {

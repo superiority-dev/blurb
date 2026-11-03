@@ -6,13 +6,7 @@ import "net/http"
 func (a *api) hashGet(w http.ResponseWriter, r *http.Request) {
 	values := r.URL.Query()
 
-	formats, err := parseFormats(values)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, codeBadRequest, err.Error())
-		return
-	}
-
-	extras, err := parseExtras(values)
+	formats, extras, err := parseOptions(values)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, codeBadRequest, err.Error())
 		return

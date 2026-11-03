@@ -427,7 +427,8 @@ func TestClientBodyRead(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := (&clientBody{r: iotest.ErrReader(tc.err)}).Read(make([]byte, 1))
+			body := &clientBody{r: iotest.ErrReader(tc.err), rc: http.NewResponseController(httptest.NewRecorder())}
+			_, err := body.Read(make([]byte, 1))
 			if !errors.Is(err, tc.err) {
 				t.Fatalf("got %v, want it to wrap %v", err, tc.err)
 			}
@@ -441,9 +442,9 @@ func TestClientBodyRead(t *testing.T) {
 	}
 }
 
-// TestClientBodyDeadline requires a body that stalls, inside its header or
-// after it, or that arrives a byte at a time, to be answered 408 once its
-// deadline passes, and a complete request to be served after it.
+// TestClientBodyDeadline requires [NewHandler] to answer 408 to a body that
+// stalls, inside its header or after it, or that arrives a byte at a time,
+// once its deadline passes, and to serve a complete request after it.
 func TestClientBodyDeadline(t *testing.T) {
 	photo := testimage.GradientJPEG(t, 300, 200)
 
@@ -464,13 +465,26 @@ func TestClientBodyDeadline(t *testing.T) {
 				t.Fatal(err)
 			}
 
+			cfg := testConfig()
+			cfg.BodyTimeout = testBodyTimeout
+
 			hashAPI := testAPI(t)
-			hashAPI.bodyTimeout = testBodyTimeout
-			hashAPI.hasher.decodeQueue = decodeQueue
+			h, err := NewHandler(
+				cfg,
+				hashAPI.fetcher,
+				hashAPI.hashQueue,
+				decodeQueue,
+				testReady(),
+				discardLogger,
+				noop.NewMeterProvider(),
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
 
 			// Closed after the test's connections, since Close waits for
 			// their requests.
-			srv := httptest.NewServer(apiHandler(hashAPI, discardLogger))
+			srv := httptest.NewServer(h)
 			t.Cleanup(srv.Close)
 
 			start := time.Now()

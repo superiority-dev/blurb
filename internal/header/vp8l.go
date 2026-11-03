@@ -139,6 +139,14 @@ const (
 	// holds 2n-1.
 	vp8lNodeBytes = 8
 
+	// vp8lWordBytes is the bytes of a uint32, which holds each code length,
+	// each code and each color cache entry.
+	vp8lWordBytes = 4
+
+	// vp8lIndexBytes is the bytes of an int16, which holds each group
+	// index's place among the kept groups.
+	vp8lIndexBytes = 2
+
 	// vp8lGroupBytes is the bytes of a group's five trees beside their
 	// nodes: each a slice header, 24 bytes on a 64-bit platform, and a table
 	// of 128 uint32.
@@ -210,30 +218,39 @@ func (r *vp8lReader) read(n uint) int {
 }
 
 // readSubImage reads past a sub-image of w by h pixels, as per RFC 9649
-// section 3.6.1, and returns the largest group index its pixels hold. It sets
-// used[i] for each group index i below len(used) that a pixel may hold.
-func (r *vp8lReader) readSubImage(w, h int64, used []bool) int {
+// section 3.6.1, and returns the largest group index its pixels hold and the
+// memory x/image's decoder allocates for it beside its pixels. It sets used[i]
+// for each group index i below len(used) that a pixel may hold.
+func (r *vp8lReader) readSubImage(w, h int64, used []bool) (maxIndex int, bytes int64) {
 	var group [vp8lCodes]vp8lCode
 
-	r.readGroup(&group, r.readCacheBits(), true)
+	cacheBits := r.readCacheBits()
+	bytes = r.readGroup(&group, cacheBits, true) + vp8lCacheBytes(cacheBits) + heapBytes(vp8lGroupBytes)
 
-	return r.skipPixels(&group, w*h, used)
+	return r.skipPixels(&group, w*h, used), bytes
 }
 
 // readGroup reads a group's codes into group, green's alphabet widened by a
-// color cache of 1<<cacheBits colors unless cacheBits is 0. It fails on an
-// invalid code only when kept, since the decoder builds only kept groups'
-// trees.
-func (r *vp8lReader) readGroup(group *[vp8lCodes]vp8lCode, cacheBits uint, kept bool) {
+// color cache of 1<<cacheBits colors unless cacheBits is 0, and returns the
+// memory x/image's decoder allocates to read them. It fails on an invalid code
+// only when kept, since the decoder builds only kept groups' trees.
+func (r *vp8lReader) readGroup(group *[vp8lCodes]vp8lCode, cacheBits uint, kept bool) int64 {
+	var bytes int64
+
 	for i, alphabet := range vp8lAlphabets {
 		if i == 0 && cacheBits > 0 {
 			alphabet += 1 << cacheBits
 		}
 
-		if !r.readCode(&group[i], alphabet) && kept {
+		code, valid := r.readCode(&group[i], alphabet, kept)
+		if !valid && kept {
 			r.fail()
 		}
+
+		bytes += code
 	}
+
+	return bytes
 }
 
 // readCacheBits returns the size of a color cache, as a power of two, or 0 for
@@ -253,9 +270,10 @@ func (r *vp8lReader) readCacheBits() uint {
 }
 
 // readCode reads a prefix code of alphabet symbols into code, as per RFC 9649
-// section 3.7.2.1, and reports whether the code is valid, as x/image's decoder
-// requires of each code it builds a Huffman tree of.
-func (r *vp8lReader) readCode(code *vp8lCode, alphabet int) bool {
+// section 3.7.2.1. It returns the memory x/image's decoder allocates to read
+// the code, and to build its Huffman tree when kept, and reports whether the
+// code is valid, as the decoder requires of each code it builds a tree of.
+func (r *vp8lReader) readCode(code *vp8lCode, alphabet int, kept bool) (bytes int64, valid bool) {
 	if r.read(1) == 1 {
 		var symbols [vp8lSimpleSymbols]int
 
@@ -273,8 +291,11 @@ func (r *vp8lReader) readCode(code *vp8lCode, alphabet int) bool {
 		}
 
 		code.simple(symbols[:n])
+		if kept {
+			bytes = heapBytes(int64(2*n-1) * vp8lNodeBytes)
+		}
 
-		return symbols[0] < alphabet && symbols[1] < alphabet
+		return bytes, symbols[0] < alphabet && symbols[1] < alphabet
 	}
 
 	var (
@@ -288,8 +309,10 @@ func (r *vp8lReader) readCode(code *vp8lCode, alphabet int) bool {
 
 	if !lengthCode.build(codeLengths[:]) {
 		r.fail()
-		return false
+		return 0, false
 	}
+
+	bytes = heapBytes(int64(alphabet)*vp8lWordBytes) + lengthCode.treeBytes(vp8lCodeLengthCodes)
 
 	lengths := r.lengths[:alphabet]
 	clear(lengths)
@@ -333,7 +356,12 @@ func (r *vp8lReader) readCode(code *vp8lCode, alphabet int) bool {
 		}
 	}
 
-	return code.build(lengths)
+	valid = code.build(lengths)
+	if kept {
+		bytes += code.treeBytes(alphabet)
+	}
+
+	return bytes, valid
 }
 
 // skipPixels reads past n pixels coded by group, as per RFC 9649 section
@@ -462,6 +490,18 @@ func (c *vp8lCode) build(lengths []uint8) bool {
 	return c.n > 0 && left == 0
 }
 
+// treeBytes returns the memory x/image's decoder allocates to build c's
+// Huffman tree from alphabet code lengths: its nodes, and its codes unless c
+// has one symbol.
+func (c *vp8lCode) treeBytes(alphabet int) int64 {
+	bytes := heapBytes(int64(2*c.n-1) * vp8lNodeBytes)
+	if c.n > 1 {
+		bytes += heapBytes(int64(alphabet) * vp8lWordBytes)
+	}
+
+	return bytes
+}
+
 // constant reports whether c reads no bits.
 func (c *vp8lCode) constant() bool { return len(c.symbols) == 1 }
 
@@ -506,14 +546,16 @@ func vp8lImageBytes(r io.ByteReader) (bytes int64, err error) {
 	return vp8lBytes(r, w, h)
 }
 
-// vp8lBytes estimates the memory x/image's decoder holds beside its pixels for
-// a w by h lossless bitstream, read from r where its transforms start: the
-// transforms' sub-images, the group map and the Huffman trees. The error is
-// r's when r ends before the last tree, or errVP8L.
+// vp8lBytes estimates the memory x/image's decoder allocates beside its pixels
+// for a w by h lossless bitstream, read from r where its transforms start: the
+// transforms' sub-images, the pixels a color table packs, the group map, the
+// color caches, and the Huffman trees with what building them allocates. The
+// error is r's when r ends before the last tree, or errVP8L.
 func vp8lBytes(r io.ByteReader, w, h int) (bytes int64, err error) {
 	var (
-		n    int64
-		seen [vp8lTransforms]bool
+		n      int64
+		seen   [vp8lTransforms]bool
+		packed bool
 	)
 
 	stream := &vp8lReader{r: r}
@@ -532,13 +574,14 @@ func vp8lBytes(r io.ByteReader, w, h int) (bytes int64, err error) {
 		case vp8lPredictor, vp8lColor:
 			bits := vp8lMinTileBits + uint(stream.read(vp8lTileBits))
 			tileW, tileH := vp8lTiles(width, bits), vp8lTiles(int64(h), bits)
-			stream.readSubImage(tileW, tileH, nil)
-			n += heapBytes(tileW * tileH * vp8lPixelBytes)
+			_, sub := stream.readSubImage(tileW, tileH, nil)
+			n += sub + heapBytes(tileW*tileH*vp8lPixelBytes)
 		case vp8lColorIndexing:
 			colors := 1 + stream.read(vp8lColorBits)
-			stream.readSubImage(int64(colors), 1, nil)
-			n += heapBytes(vp8lColorTableBytes)
+			_, sub := stream.readSubImage(int64(colors), 1, nil)
+			n += sub + heapBytes(vp8lColorTableBytes)
 			width = vp8lTiles(width, vp8lPackBits(colors))
+			packed = vp8lPackBits(colors) > 0
 		}
 	}
 
@@ -554,14 +597,20 @@ func vp8lBytes(r io.ByteReader, w, h int) (bytes int64, err error) {
 		bits := vp8lMinTileBits + uint(stream.read(vp8lTileBits))
 		tileW, tileH := vp8lTiles(width, bits), vp8lTiles(int64(h), bits)
 
-		maxIndex = stream.readSubImage(tileW, tileH, used[:])
+		var sub int64
+		maxIndex, sub = stream.readSubImage(tileW, tileH, used[:])
 		if maxIndex >= vp8lMaxGroups {
 			stream.fail()
 		}
 
 		mapped = maxIndex >= vp8lMappedIndex || int64(maxIndex) >= tileW*tileH
-		n += heapBytes(tileW * tileH * vp8lPixelBytes)
+		n += sub + heapBytes(tileW*tileH*vp8lPixelBytes)
+		if mapped {
+			n += heapBytes(int64(maxIndex+1) * vp8lIndexBytes)
+		}
 	}
+
+	n += vp8lCacheBytes(cacheBits)
 
 	var (
 		group  [vp8lCodes]vp8lCode
@@ -570,15 +619,10 @@ func vp8lBytes(r io.ByteReader, w, h int) (bytes int64, err error) {
 
 	for i := 0; i <= maxIndex && stream.err == nil; i++ {
 		kept := !mapped || used[i]
-		stream.readGroup(&group, cacheBits, kept)
+		n += stream.readGroup(&group, cacheBits, kept)
 
-		if !kept || stream.err != nil {
-			continue
-		}
-
-		groups++
-		for _, code := range group {
-			n += heapBytes(int64(2*code.n-1) * vp8lNodeBytes)
+		if kept && stream.err == nil {
+			groups++
 		}
 	}
 
@@ -586,7 +630,21 @@ func vp8lBytes(r io.ByteReader, w, h int) (bytes int64, err error) {
 		return 0, stream.err
 	}
 
+	if packed {
+		n += heapBytes(width * int64(h) * vp8lPixelBytes)
+	}
+
 	return n + heapBytes(groups*vp8lGroupBytes), nil
+}
+
+// vp8lCacheBytes returns the memory x/image's decoder allocates for a color
+// cache of 1<<bits colors, or none when bits is 0.
+func vp8lCacheBytes(bits uint) int64 {
+	if bits == 0 {
+		return 0
+	}
+
+	return heapBytes(vp8lWordBytes << bits)
 }
 
 // vp8lTiles returns the count of tiles of 1<<bits pixels that cover size

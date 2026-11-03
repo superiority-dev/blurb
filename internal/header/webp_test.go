@@ -47,7 +47,7 @@ func TestScanWebP(t *testing.T) {
 				kind:     webpVP8,
 				frame:    206,
 				alpha:    true,
-				lossless: 3717,
+				lossless: 10931,
 			},
 		},
 		{
@@ -55,7 +55,7 @@ func TestScanWebP(t *testing.T) {
 			input: lossless,
 			want: webpImage{
 				kind:     webpVP8L,
-				lossless: 4293,
+				lossless: 23910,
 			},
 		},
 		{
@@ -63,7 +63,7 @@ func TestScanWebP(t *testing.T) {
 			input: testimage.WebPExtendedLossless(),
 			want: webpImage{
 				kind:     webpVP8L,
-				lossless: 4293,
+				lossless: 23910,
 			},
 		},
 		{
@@ -89,7 +89,7 @@ func TestScanWebP(t *testing.T) {
 				alpha:    true,
 				start:    testimage.WebPFrameStart,
 				length:   int64(len(alpha) - testimage.WebPChunksStart),
-				lossless: 3717,
+				lossless: 10931,
 			},
 		},
 		{
@@ -101,7 +101,7 @@ func TestScanWebP(t *testing.T) {
 				bounds:   image.Rect(0, 0, 64, 48),
 				start:    testimage.WebPFrameStart,
 				length:   int64(len(lossless) - 12),
-				lossless: 4293,
+				lossless: 23910,
 			},
 		},
 		{
@@ -121,6 +121,15 @@ func TestScanWebP(t *testing.T) {
 			input: testimage.WebPFile(
 				testimage.WebPVP8X(1<<1, 64, 48),
 				testimage.WebPFrame(nil, origin),
+				lossyFrame,
+			),
+			err: ErrUnreadable,
+		},
+		{
+			name: "animated, a first frame shorter than its frame header",
+			input: testimage.WebPFile(
+				testimage.WebPVP8X(1<<1, 64, 48),
+				testimage.WebPChunk("ANMF", []byte{0, 0, 0, 0}),
 				lossyFrame,
 			),
 			err: ErrUnreadable,
@@ -155,7 +164,7 @@ func TestScanWebP(t *testing.T) {
 				kind:     webpVP8,
 				frame:    206,
 				alpha:    true,
-				lossless: 3717,
+				lossless: 10931,
 			},
 		},
 		{
@@ -266,7 +275,7 @@ func TestWebPDecodeBytes(t *testing.T) {
 				kind:     webpVP8L,
 				lossless: 10_000,
 			},
-			want: 6*1000*1000 + 10_000,
+			want: 4*1000*1000 + 10_000,
 		},
 		{
 			name:  "lossless after VP8X, reported as YCbCr",
@@ -275,7 +284,7 @@ func TestWebPDecodeBytes(t *testing.T) {
 				kind:     webpVP8L,
 				lossless: 10_000,
 			},
-			want: 6*1000*1000 + 10_000,
+			want: 4*1000*1000 + 10_000,
 		},
 		{
 			name:  "animated, a lossy first frame of 500x500",
@@ -309,7 +318,7 @@ func TestWebPDecodeBytes(t *testing.T) {
 				bounds:   image.Rect(0, 0, 40, 40),
 				lossless: 10_000,
 			},
-			want: 6*40*40 + 10_000,
+			want: 4*40*40 + 10_000,
 		},
 	}
 
@@ -338,11 +347,11 @@ func TestWebPAlphaBytes(t *testing.T) {
 		want    int64
 		err     error
 	}{
-		// 3,717 bytes is what x/image's decoder allocates for the alpha's
-		// sub-images and Huffman trees, each allocation rounded up as
+		// 10,931 bytes is what x/image's decoder allocates for the alpha's
+		// bitstream beside its pixels, each allocation rounded up as
 		// heapBytes rounds it.
-		{name: "lossless", payload: payload, want: 3717},
-		{name: "lossless, filtered", payload: filtered, want: 3717},
+		{name: "lossless", payload: payload, want: 10931},
+		{name: "lossless, filtered", payload: filtered, want: 10931},
 		{name: "uncompressed", payload: append([]byte{0}, make([]byte, 64*48)...), want: 0},
 		{name: "an unknown compression method", payload: unknown, want: 0},
 		{name: "empty", payload: nil, err: io.EOF},

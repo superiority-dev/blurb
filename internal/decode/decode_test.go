@@ -245,9 +245,68 @@ func TestSmallErrors(t *testing.T) {
 	}
 }
 
-// FuzzSmall requires each error from [Small] to match [header.ErrUnreadable],
-// and each image it returns to have [maxSide] as its longer side and its
-// source's aspect ratio.
+// TestSmallUnsupportedFeature requires a JPEG whose header reads but whose
+// pixels use a feature the decoder does not implement to fail with an
+// [*header.UnsupportedFeatureError] naming that feature.
+func TestSmallUnsupportedFeature(t *testing.T) {
+	cases := []struct {
+		name       string
+		components string
+		sampling   []byte
+		side       byte
+		feature    string
+	}{
+		{
+			name:       "CMYK without Adobe APP14",
+			components: "CMYK",
+			sampling:   []byte{0x11, 0x11, 0x11, 0x11},
+			side:       8,
+			feature:    "unknown color model: 4-component JPEG doesn't have Adobe APP14 metadata",
+		},
+		{
+			name:       "RGB with blue subsampled",
+			components: "RGB",
+			sampling:   []byte{0x22, 0x22, 0x11},
+			side:       16,
+			feature:    "luma/chroma subsampling ratio",
+		},
+	}
+
+	for _, tc := range cases {
+		frame := []byte{8, 0, tc.side, 0, tc.side, byte(len(tc.components))}
+		scan := []byte{byte(len(tc.components))}
+
+		for i, id := range []byte(tc.components) {
+			frame = append(frame, id, tc.sampling[i], 0)
+			scan = append(scan, id, 0)
+		}
+
+		// Each Huffman table has one code, 0, so a flat block is two zero bits.
+		data := append([]byte{0xff, 0xd8}, testimage.JPEGSegment(0xdb, make([]byte, 65))...)
+		data = append(data, testimage.JPEGSegment(0xc0, frame)...)
+		data = append(data, testimage.JPEGSegment(0xc4, []byte{0x00, 1, 17: 0})...)
+		data = append(data, testimage.JPEGSegment(0xc4, []byte{0x10, 1, 17: 0})...)
+		data = append(data, testimage.JPEGSegment(0xda, append(scan, 0, 63, 0))...)
+		data = append(data, make([]byte, 16)...)
+		data = append(data, 0xff, 0xd9)
+
+		info, rest, err := header.Read(bytes.NewReader(data))
+		if err != nil {
+			t.Fatalf("%s: header.Read: %v", tc.name, err)
+		}
+
+		_, _, err = Small(rest, info)
+
+		feature, ok := errors.AsType[*header.UnsupportedFeatureError](err)
+		if !ok || *feature != (header.UnsupportedFeatureError{Format: "jpeg", Feature: tc.feature}) {
+			t.Errorf("%s: got %v, want the jpeg feature %q", tc.name, err, tc.feature)
+		}
+	}
+}
+
+// FuzzSmall requires each error from [Small] to match [header.ErrUnreadable]
+// or be an [*header.UnsupportedFeatureError], and each image it returns to
+// have [maxSide] as its longer side and its source's aspect ratio.
 func FuzzSmall(f *testing.F) {
 	src := testimage.Gradient(30, 20)
 	jpegBytes := testimage.EncodeJPEG(f, src)
@@ -274,8 +333,9 @@ func FuzzSmall(f *testing.F) {
 
 		small, _, err := Small(rest, info)
 		if err != nil {
-			if !errors.Is(err, header.ErrUnreadable) {
-				t.Fatalf("got %v, want an error matching header.ErrUnreadable", err)
+			_, unsupported := errors.AsType[*header.UnsupportedFeatureError](err)
+			if !unsupported && !errors.Is(err, header.ErrUnreadable) {
+				t.Fatalf("got %v, want header.ErrUnreadable or an unsupported feature", err)
 			}
 
 			return
@@ -296,6 +356,7 @@ func TestHasAlpha(t *testing.T) {
 	r := image.Rect(0, 0, 1, 1)
 	opaque := image.NewPaletted(r, color.Palette{color.Black, color.White})
 	seeThrough := image.NewPaletted(r, color.Palette{color.Black, color.Transparent})
+	translucent := image.NewPaletted(r, color.Palette{color.Black, color.NRGBA{R: 255, A: 0x80}})
 
 	cases := map[string]struct {
 		img  image.Image
@@ -305,7 +366,10 @@ func TestHasAlpha(t *testing.T) {
 		"NRGBA64":               {img: image.NewNRGBA64(r), want: true},
 		"NYCbCrA":               {img: image.NewNYCbCrA(r, image.YCbCrSubsampleRatio420), want: true},
 		"paletted, transparent": {img: seeThrough, want: true},
+		"paletted, translucent": {img: translucent, want: true},
 		"paletted, opaque":      {img: opaque, want: false},
+		"Alpha":                 {img: image.NewAlpha(r), want: true},
+		"Alpha16":               {img: image.NewAlpha16(r), want: true},
 		"YCbCr":                 {img: image.NewYCbCr(r, image.YCbCrSubsampleRatio420), want: false},
 		"RGBA":                  {img: image.NewRGBA(r), want: false},
 		"Gray":                  {img: image.NewGray(r), want: false},

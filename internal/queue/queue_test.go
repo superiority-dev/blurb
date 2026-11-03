@@ -3,14 +3,14 @@ package queue
 import (
 	"context"
 	"errors"
+	"runtime"
 	"testing"
 	"testing/synctest"
 	"time"
 )
 
-// TestNew requires [New] to refuse a concurrency that is not positive and a
-// negative [Options.MaxWaitingRequests], [Options.Timeout] or
-// [Options.MaxMemoryBytes], and to accept zero for those three.
+// TestNew requires [New] to refuse a concurrency that is not positive or a
+// negative [Options] field, and to accept every field at zero.
 func TestNew(t *testing.T) {
 	cases := []struct {
 		concurrency int
@@ -20,6 +20,7 @@ func TestNew(t *testing.T) {
 		{concurrency: 1, opts: Options{MaxWaitingRequests: -1}},
 		{concurrency: 1, opts: Options{Timeout: -1}},
 		{concurrency: 1, opts: Options{MaxMemoryBytes: -1}},
+		{concurrency: 1, opts: Options{CollectAboveBytes: -1}},
 	}
 
 	for _, tc := range cases {
@@ -29,7 +30,7 @@ func TestNew(t *testing.T) {
 	}
 
 	if _, err := New(1, Options{}); err != nil {
-		t.Errorf("New with MaxWaitingRequests, Timeout and MaxMemoryBytes at zero: %v", err)
+		t.Errorf("New with every field at zero: %v", err)
 	}
 }
 
@@ -337,7 +338,42 @@ func TestAcquireCancelGranted(t *testing.T) {
 	})
 }
 
-// newQueue returns [New]'s [Queue] and fails t on an error.
+// TestAcquireCollect requires a garbage collection at the end of the request
+// whose bytes bring the count given back since the last one above
+// [Options.CollectAboveBytes], and none while the option is 0.
+func TestAcquireCollect(t *testing.T) {
+	cases := []struct {
+		collectAbove int64
+		ends         []int64
+		want         []uint32
+	}{
+		{collectAbove: 10, ends: []int64{4, 4, 3, 10, 1}, want: []uint32{0, 0, 1, 0, 1}},
+		{collectAbove: 10, ends: []int64{11, 11}, want: []uint32{1, 1}},
+		{collectAbove: 0, ends: []int64{100}, want: []uint32{0}},
+	}
+
+	for _, tc := range cases {
+		queue := newQueue(t, 1, Options{MaxMemoryBytes: 100, CollectAboveBytes: tc.collectAbove})
+
+		for i, n := range tc.ends {
+			release, err := queue.Acquire(context.Background(), n)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			var before, after runtime.MemStats
+			runtime.ReadMemStats(&before)
+			release()
+			runtime.ReadMemStats(&after)
+
+			if got := after.NumForcedGC - before.NumForcedGC; got != tc.want[i] {
+				t.Errorf("CollectAboveBytes %d, ends %v: end %d ran %d forced collections, want %d",
+					tc.collectAbove, tc.ends[:i+1], i, got, tc.want[i])
+			}
+		}
+	}
+}
+
 // TestStats requires the counts to follow each admission, wait and release,
 // and the bytes to stay 0 without a memory bound.
 func TestStats(t *testing.T) {
@@ -385,6 +421,7 @@ func TestStats(t *testing.T) {
 	})
 }
 
+// newQueue returns [New]'s [Queue] and fails t on an error.
 func newQueue(t *testing.T, concurrency int, opts Options) *Queue {
 	t.Helper()
 

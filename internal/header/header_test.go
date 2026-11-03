@@ -250,10 +250,23 @@ func TestReadErrors(t *testing.T) {
 	}
 }
 
-// TestReadStops requires [Read] to refuse, within the first 64 KiB of its
-// input, a feature its decoder does not implement.
+// TestReadStops requires [Read] to refuse an image that uses a feature its
+// decoder does not implement, reading at most 64 KiB past the image, with an
+// [*UnsupportedFeatureError] naming the feature.
 func TestReadStops(t *testing.T) {
 	sof3 := append([]byte{0xff, 0xd8}, testimage.JPEGSegment(0xc3, []byte{8, 0, 16, 0, 16, 1, 1, 0x11, 0})...)
+
+	// A CMYK 4:2:2 frame header ending at 1 MiB after APP2 segments of at most
+	// 65,533 bytes, the longest payload a 16-bit segment length allows.
+	cmyk422 := testimage.JPEGSegment(0xc0, []byte{8, 0, 16, 0, 16, 4, 1, 0x21, 0, 2, 0x11, 0, 3, 0x11, 0, 4, 0x21, 0})
+	atLimit := []byte{0xff, 0xd8}
+
+	for len(atLimit)+len(cmyk422) < 1<<20 {
+		payload := min(1<<20-len(atLimit)-len(cmyk422)-4, 1<<16-3)
+		atLimit = append(atLimit, testimage.JPEGSegment(0xe2, make([]byte, payload))...)
+	}
+
+	atLimit = append(atLimit, cmyk422...)
 
 	cases := []struct {
 		name  string
@@ -266,6 +279,11 @@ func TestReadStops(t *testing.T) {
 			want:  UnsupportedFeatureError{Format: formatJPEG, Feature: "unknown marker"},
 		},
 		{
+			name:  "CMYK JPEG 4:2:2, header ending at 1 MiB",
+			input: atLimit,
+			want:  UnsupportedFeatureError{Format: formatJPEG, Feature: "luma/chroma subsampling ratio"},
+		},
+		{
 			name:  "PNG bit depth 3",
 			input: testimage.PNGWithIHDR(testimage.EncodePNG(t, testimage.Gradient(40, 30)), 8, 3),
 			want:  UnsupportedFeatureError{Format: formatPNG, Feature: "bit depth 3, color type 2"},
@@ -276,8 +294,8 @@ func TestReadStops(t *testing.T) {
 		counter := &readers.Counting{R: io.MultiReader(bytes.NewReader(tc.input), bytes.NewReader(make([]byte, 2<<20)))}
 		_, _, err := Read(counter)
 
-		if counter.N > 64<<10 {
-			t.Errorf("%s: read %d bytes, want at most 64 KiB", tc.name, counter.N)
+		if counter.N > int64(len(tc.input))+64<<10 {
+			t.Errorf("%s: read %d bytes, want at most 64 KiB past the image", tc.name, counter.N)
 		}
 
 		var feature *UnsupportedFeatureError
@@ -325,7 +343,7 @@ func TestReadAnimated(t *testing.T) {
 				Width:       64,
 				Height:      48,
 				Orientation: OrientationNormal,
-				DecodeBytes: wantLossy + 64*48*5 + 3717,
+				DecodeBytes: wantLossy + 64*48*5 + 10931,
 				Frame:       image.Rect(0, 0, 64, 48),
 			},
 		},
@@ -343,7 +361,8 @@ func TestReadAnimated(t *testing.T) {
 		},
 		{
 			// The predictor's sub-image is the frame's 16 by 12 tiles, not the
-			// canvas's 25 by 20, at 4 bytes each: 768 bytes and 208 more.
+			// canvas's 25 by 20, at 4 bytes each: 768 bytes and 208 more. It
+			// and the alpha each have a group of five one-node trees.
 			name:  "lossy with alpha at (20,10) on 100x80",
 			input: testimage.WebPTwoFrames(append(predicted, lossy[12:]...), true, image.Pt(20, 10), image.Pt(100, 80)),
 			want: Info{
@@ -351,7 +370,7 @@ func TestReadAnimated(t *testing.T) {
 				Width:       100,
 				Height:      80,
 				Orientation: OrientationNormal,
-				DecodeBytes: wantLossy + 64*48*5 + 976 + 3366 + 5*26,
+				DecodeBytes: wantLossy + 64*48*5 + 976 + 2*(3366+5*26),
 				Frame:       image.Rect(20, 10, 84, 58),
 			},
 		},
@@ -472,14 +491,14 @@ func FuzzRead(f *testing.F) {
 // 208 at 1.5 bytes a pixel; the PNG decodes to RGBA, twice that when
 // interlaced, a gray one with a tRNS chunk to NRGBA, and the GIF to a paletted
 // image. The lossy WebP decodes to 4:2:0 beside its 206-byte VP8 chunk, the
-// lossless one at 6 bytes a pixel beside the 4,293 bytes x/image's decoder
-// allocates for its bitstream's sub-images and Huffman trees, each allocation
-// rounded up as heapBytes rounds it.
+// lossless one at 4 bytes a pixel beside the 23,910 bytes x/image's decoder
+// allocates for its bitstream, each allocation rounded up as heapBytes rounds
+// it.
 const (
 	wantJPEG       = 304*208*3/2 + 1<<20
 	wantPNG        = 300*200*4 + 1<<20
 	wantInterlaced = 2*300*200*4 + 1<<20
 	wantGIF        = 10*10 + 1<<20
 	wantLossy      = 64*48*3/2 + 206 + 1<<20
-	wantLossless   = 64*48*6 + 4293 + 1<<20
+	wantLossless   = 64*48*4 + 23910 + 1<<20
 )

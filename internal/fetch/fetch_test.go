@@ -1,6 +1,7 @@
 package fetch
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -94,6 +95,38 @@ func TestFetchPrivateAddress(t *testing.T) {
 
 	if _, _, err := fetcher.Fetch(context.Background(), srv.URL+"/a.jpg"); !errors.Is(err, ErrAddressNotAllowed) {
 		t.Errorf("got %v, want ErrAddressNotAllowed", err)
+	}
+}
+
+// TestFetchStatus requires every origin status but 200 to be an
+// [OriginStatusError] with that status, a partial or empty answer included.
+func TestFetchStatus(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		status, err := strconv.Atoi(strings.TrimPrefix(r.URL.Path, "/"))
+		if err != nil {
+			t.Error(err)
+		}
+
+		w.WriteHeader(status)
+		fmt.Fprint(w, "part of an image")
+	}))
+	defer srv.Close()
+
+	fetcher := newFetcher(t, testTimeout, testMaxBytes, Options{})
+	statuses := []int{
+		http.StatusPartialContent,
+		http.StatusNoContent,
+		http.StatusNotFound,
+		http.StatusInternalServerError,
+	}
+
+	for _, status := range statuses {
+		var se *OriginStatusError
+
+		_, _, err := fetcher.Fetch(context.Background(), srv.URL+"/"+strconv.Itoa(status))
+		if !errors.As(err, &se) || se.Status != status {
+			t.Errorf("origin %d: got %v, want an OriginStatusError with %d", status, err, status)
+		}
 	}
 }
 
@@ -296,6 +329,33 @@ func TestFetchTimeout(t *testing.T) {
 	}
 }
 
+// TestFetchSlowReader requires the time between a fetched body's reads not to
+// count against the timeout.
+func TestFetchSlowReader(t *testing.T) {
+	// Larger than the socket buffers, so most of it is read after the wait.
+	image := bytes.Repeat([]byte("x"), slowReaderBodyBytes)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(image)
+	}))
+	defer srv.Close()
+
+	fetcher := newFetcher(t, 50*time.Millisecond, slowReaderBodyBytes, Options{})
+
+	fetched, _, err := fetcher.Fetch(context.Background(), srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer fetched.Close()
+
+	time.Sleep(200 * time.Millisecond)
+
+	b, err := io.ReadAll(fetched)
+	if err != nil || !bytes.Equal(b, image) {
+		t.Errorf("read 200ms after a fetch with a 50ms timeout: %d bytes, %v; want %d", len(b), err, len(image))
+	}
+}
+
 // TestFetchBodyErrors requires a body that ends before its Content-Length to
 // fail with [ErrOriginCut], and one with broken chunked encoding with
 // [ErrOriginMalformed].
@@ -369,7 +429,8 @@ func TestBodyRead(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := (&body{r: io.NopCloser(iotest.ErrReader(tc.err))}).Read(make([]byte, 1))
+			fetchedBody := &body{r: io.NopCloser(iotest.ErrReader(tc.err)), dl: newDeadline(time.Hour, func(error) {})}
+			_, err := fetchedBody.Read(make([]byte, 1))
 			if !errors.Is(err, tc.err) {
 				t.Fatalf("got %v, want it to wrap %v", err, tc.err)
 			}
@@ -412,6 +473,8 @@ const (
 	testHost     = "127.0.0.1"
 	testTimeout  = 5 * time.Second
 	testMaxBytes = 1 << 20 // 1 MiB
+
+	slowReaderBodyBytes = 16 << 20 // 16 MiB
 )
 
 // newFetcher returns [New]'s [Fetcher] and fails t on an error. It allows

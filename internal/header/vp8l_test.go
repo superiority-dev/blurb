@@ -25,6 +25,14 @@ const (
 	// invalidGroup is a group of four oneSymbol codes and a distance code
 	// whose one symbol, 200, is past its alphabet of 40.
 	invalidGroup = oneSymbol + oneSymbol + oneSymbol + oneSymbol + "1 0 1 200:8 "
+
+	// lengthCode starts a normal code whose code length code has three
+	// symbols: 18, coded 0, and the lengths 0 and 1, coded 1 0 and 1 1.
+	lengthCode = "0 0:4 0:3 1:3 2:3 2:3 "
+
+	// copyGreen is a green code whose one symbol is 256, the first copy:
+	// max_symbol 3, then 138 and 118 zeros, then a length of 1.
+	copyGreen = lengthCode + "1 0:3 1:2 0 127:7 0 107:7 1 1 "
 )
 
 func TestVP8LImageBytes(t *testing.T) {
@@ -39,10 +47,10 @@ func TestVP8LImageBytes(t *testing.T) {
 		want  int64
 		err   error
 	}{
-		// 4,293 bytes is what x/image's decoder allocates for the fixture's
-		// sub-images and Huffman trees, each allocation rounded up as
+		// 23,910 bytes is what x/image's decoder allocates for the fixture's
+		// bitstream beside its pixels, each allocation rounded up as
 		// heapBytes rounds it.
-		{name: "the fixture", input: bitstream, want: 4293},
+		{name: "the fixture", input: bitstream, want: 23910},
 		{name: "a wrong signature", input: wrongSignature, err: errVP8L},
 		{name: "cut inside the header", input: bitstream[:3], err: io.EOF},
 		{name: "cut inside the trees", input: bitstream[:10], err: io.EOF},
@@ -84,14 +92,36 @@ func TestVP8LBytes(t *testing.T) {
 			want:   3366 + 5*26,
 		},
 		{
+			// A green normal code of the one symbol 0 adds its 280 code
+			// lengths, 1,120 bytes and 296 more, and the code length code's
+			// tree of 5 nodes, 40 bytes and 26 more, with its 19 codes, 76
+			// bytes and 35 more.
+			name:   "a normal code",
+			w:      1,
+			h:      1,
+			fields: "0 0 0 " + lengthCode + "1 0:3 0:2 1 1 1 0 " + strings.Repeat(oneSymbol, 4),
+			want:   3366 + 5*26 + 1416 + 66 + 111,
+		},
+		{
+			// A color cache of 2,048 colors, 8,192 bytes and 2,064 more,
+			// beside one group.
+			name:   "a color cache of 11 bits",
+			w:      1,
+			h:      1,
+			fields: "0 1 11:4 0 " + oneSymbolGroup,
+			want:   3366 + 5*26 + 10256,
+		},
+		{
 			// Of 1,001 groups, the decoder keeps the two the map refers to:
 			// 4,096 bytes of map and 1,040 more, 5,360 bytes of groups and
-			// 1,356 more, and their ten trees.
+			// 1,356 more, and their ten trees. The map's own group has two
+			// trees of 3 nodes and three of one, and the 1,001 places of the
+			// kept groups take 2,002 bytes and 516 more.
 			name:   "a group index of 1,000",
 			w:      128,
 			h:      128,
 			fields: index1000,
-			want:   5136 + 6716 + 10*26,
+			want:   5136 + 6716 + 10*26 + 3366 + 2*46 + 3*26 + 2518,
 		},
 		{
 			name:   "a group index of 2,600",
@@ -107,7 +137,7 @@ func TestVP8LBytes(t *testing.T) {
 			w:      128,
 			h:      128,
 			fields: strings.Replace(index1000, oneSymbolGroup+oneSymbolGroup, oneSymbolGroup+invalidGroup, 1),
-			want:   5136 + 6716 + 10*26,
+			want:   5136 + 6716 + 10*26 + 3366 + 2*46 + 3*26 + 2518,
 		},
 		{
 			name:   "an invalid code in a kept group",
@@ -115,6 +145,115 @@ func TestVP8LBytes(t *testing.T) {
 			h:      1,
 			fields: "0 0 0 " + invalidGroup,
 			err:    errVP8L,
+		},
+		{
+			name:   "a color cache of 0 bits",
+			w:      1,
+			h:      1,
+			fields: "0 1 0:4 0 " + oneSymbolGroup,
+			err:    errVP8L,
+		},
+		{
+			name:   "a color cache of 12 bits",
+			w:      1,
+			h:      1,
+			fields: "0 1 12:4 0 " + oneSymbolGroup,
+			err:    errVP8L,
+		},
+		{
+			// max_symbol 302, past green's alphabet of 280.
+			name:   "a max_symbol past the alphabet",
+			w:      1,
+			h:      1,
+			fields: "0 0 0 " + lengthCode + "1 4:3 300:10 " + strings.Repeat(oneSymbol, 4),
+			err:    errVP8L,
+		},
+		{
+			// Code length code 18 repeats a zero 11 + 127 times, past the
+			// distance alphabet of 40.
+			name:   "a repeat past the alphabet",
+			w:      1,
+			h:      1,
+			fields: "0 0 0 " + strings.Repeat(oneSymbol, 4) + "0 0:4 0:3 1:3 0:3 0:3 0 127:7 ",
+			err:    errVP8L,
+		},
+		{
+			// A group map of 2 by 2 tiles whose green code is the one symbol
+			// 256, a copy, at its first pixel.
+			name:   "a copy at the first pixel",
+			w:      8,
+			h:      8,
+			fields: "0 0 1 0:3 0 " + copyGreen + strings.Repeat(oneSymbol, 4) + oneSymbolGroup,
+			err:    errVP8L,
+		},
+		{
+			// A group map of 2 by 2 tiles, all group 5: the decoder keeps
+			// only group 5 of the six, since 5 is not below the tile count.
+			// 16 bytes of map and heapBytes's 20 more, the map's group and
+			// its five trees, group 5 and its five trees, and the 6 places of
+			// the kept groups, 12 bytes and 19 more.
+			name:   "a group index past the tile count",
+			w:      8,
+			h:      8,
+			fields: "0 0 1 0:3 0 1 0 1 5:8 " + strings.Repeat(oneSymbol, 4) + strings.Repeat(oneSymbolGroup, 6),
+			want:   36 + 3366 + 5*26 + 3366 + 5*26 + 31,
+		},
+		{
+			// As above, with a green normal code in group 0, which the map
+			// does not refer to: the decoder still reads its 280 code lengths
+			// and builds the code length code's tree.
+			name: "a normal code in a group the map does not refer to",
+			w:    8,
+			h:    8,
+			fields: "0 0 1 0:3 0 1 0 1 5:8 " + strings.Repeat(oneSymbol, 4) +
+				lengthCode + "1 0:3 0:2 1 1 1 0 " + strings.Repeat(oneSymbol, 4) + strings.Repeat(oneSymbolGroup, 5),
+			want: 36 + 3366 + 5*26 + 3366 + 5*26 + 31 + 1416 + 66 + 111,
+		},
+		{
+			// A color table of 2 colors packs 8 pixels in one, so the 16 by 1
+			// image decodes from 2 packed pixels: the table's 1,024 bytes and
+			// 272 more with its group, the packed pixels' 8 bytes and 18 more,
+			// and the image's group.
+			name:   "a color table that packs pixels",
+			w:      16,
+			h:      1,
+			fields: "1 3:2 1:8 0 " + oneSymbolGroup + "0 0 0 " + oneSymbolGroup,
+			want:   1296 + 3366 + 5*26 + 26 + 3366 + 5*26,
+		},
+		{
+			// A color table of 15 colors packs 2 pixels in one, so the 16 by 1
+			// image decodes from 8 packed pixels, 32 bytes and 24 more.
+			name:   "a color table that packs 2 pixels in one",
+			w:      16,
+			h:      1,
+			fields: "1 3:2 14:8 0 " + oneSymbolGroup + "0 0 0 " + oneSymbolGroup,
+			want:   1296 + 3366 + 5*26 + 56 + 3366 + 5*26,
+		},
+		{
+			// The color table's sub-image of 2 colors with a color cache of 2
+			// colors, 8 bytes and 18 more.
+			name:   "a color cache in a sub-image",
+			w:      16,
+			h:      1,
+			fields: "1 3:2 1:8 1 1:4 " + oneSymbolGroup + "0 0 0 " + oneSymbolGroup,
+			want:   1296 + 3366 + 5*26 + 26 + 26 + 3366 + 5*26,
+		},
+		{
+			// A 1 by 1 image of a 2-color table still decodes from a packed
+			// pixel: its 4 bytes and 17 more.
+			name:   "a color table that packs a 1-pixel width",
+			w:      1,
+			h:      1,
+			fields: "1 3:2 1:8 0 " + oneSymbolGroup + "0 0 0 " + oneSymbolGroup,
+			want:   1296 + 3366 + 5*26 + 21 + 3366 + 5*26,
+		},
+		{
+			// A color table of 17 colors packs none, so no packed pixels.
+			name:   "a color table that packs none",
+			w:      16,
+			h:      1,
+			fields: "1 3:2 16:8 0 " + oneSymbolGroup + "0 0 0 " + oneSymbolGroup,
+			want:   1296 + 3366 + 5*26 + 3366 + 5*26,
 		},
 		{
 			name:   "cut before the last tree",
@@ -147,7 +286,7 @@ func TestVP8LBytesConstant(t *testing.T) {
 		t.Errorf("parsed in %v, want 100ms at most", elapsed)
 	}
 
-	if want := int64(3*4096*4096*4 + 3366 + 5*26); got != want || err != nil {
+	if want := int64(3*(4096*4096*4+3366+5*26) + 3366 + 5*26); got != want || err != nil {
 		t.Errorf("%d, %v, want %d", got, err, want)
 	}
 }

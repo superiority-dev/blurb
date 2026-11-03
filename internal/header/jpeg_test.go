@@ -200,6 +200,14 @@ func TestScanJPEG(t *testing.T) {
 					b:    slices.Concat(b, []byte{0}, unreached),
 				},
 				{
+					name: "a length of 0",
+					b:    slices.Concat(b, []byte{0xff, 0x00, 0, 0}, unreached),
+				},
+				{
+					name: "a length of 1",
+					b:    slices.Concat(b, []byte{0xff, 0xd0, 0, 1}, unreached),
+				},
+				{
 					name: "a segment's end",
 					b:    b,
 				},
@@ -231,6 +239,27 @@ func TestScanJPEG(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestParseJPEGFrame requires no frame from a header cut short, without
+// components, or whose horizontal or vertical sampling factors are all zero.
+func TestParseJPEGFrame(t *testing.T) {
+	cases := []struct {
+		name string
+		seg  []byte
+	}{
+		{name: "cut before the component count", seg: []byte{8, 0, 16, 0, 16}},
+		{name: "no components", seg: []byte{8, 0, 16, 0, 16, 0}},
+		{name: "a component cut short", seg: []byte{8, 0, 16, 0, 16, 1, 1, 0x11}},
+		{name: "horizontal factors all zero", seg: []byte{8, 0, 16, 0, 16, 2, 1, 0x01, 0, 2, 0x02, 0}},
+		{name: "vertical factors all zero", seg: []byte{8, 0, 16, 0, 16, 2, 1, 0x10, 0, 2, 0x20, 0}},
+	}
+
+	for _, tc := range cases {
+		if got := parseJPEGFrame(0xc0, tc.seg); got != nil {
+			t.Errorf("%s: got %+v, want nil", tc.name, got)
+		}
 	}
 }
 

@@ -173,24 +173,34 @@ func Read(r io.Reader) (info Info, rest io.Reader, err error) {
 	return info, io.MultiReader(&buf, r), nil
 }
 
+// DecodeError returns the error to report when decoding an image in format
+// fails with err: an [*UnsupportedFeatureError] when the decoder does not
+// implement a feature the image uses, and err wrapped in [ErrUnreadable]
+// otherwise.
+func DecodeError(err error, format Format) error {
+	if feature, unsupported := unsupportedFeature(err); unsupported {
+		return &UnsupportedFeatureError{Format: format, Feature: feature}
+	}
+
+	return fmt.Errorf("%w: %w", ErrUnreadable, err)
+}
+
 // headerError returns the error [Read] reports when [image.DecodeConfig] or
 // newInfo fails with err, having read n bytes of an image in format.
 func headerError(err error, format Format, n int) error {
-	feature, unsupported := unsupportedFeature(err)
+	_, unsupported := unsupportedFeature(err)
 
 	switch {
 	case errors.Is(err, ErrUnreadable):
 		return err
 	case n == 0:
 		return ErrUnreadable
-	case unsupported:
-		return &UnsupportedFeatureError{Format: format, Feature: feature}
 	case errors.Is(err, image.ErrFormat):
 		return ErrUnsupportedFormat
-	case n >= maxHeaderBytes:
+	case n >= maxHeaderBytes && !unsupported:
 		return ErrTooLarge
 	default:
-		return fmt.Errorf("%w: %w", ErrUnreadable, err)
+		return DecodeError(err, format)
 	}
 }
 

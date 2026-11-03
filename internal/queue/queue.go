@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"runtime"
 	"sync"
 	"time"
 )
@@ -37,6 +38,11 @@ type Options struct {
 	// MaxMemoryBytes bounds the memory the running requests are estimated
 	// to need together; 0 means no bound beyond the number running.
 	MaxMemoryBytes int64
+
+	// CollectAboveBytes bounds the bytes of the requests ended since the
+	// queue last ran a garbage collection: the request whose end takes them
+	// above it runs one before its bytes are given back. 0 means none.
+	CollectAboveBytes int64
 }
 
 // Queue admits requests in arrival order. It is safe for concurrent use. A
@@ -47,6 +53,8 @@ type Queue struct {
 	slots              int
 	bytes              int64
 	capacity           int64
+	collectAbove       int64
+	uncollected        int64
 	maxWaitingRequests int
 	timeout            time.Duration
 	waiting            list.List
@@ -70,9 +78,8 @@ type waiter struct {
 }
 
 // New returns a [Queue] that lets up to concurrency requests run at once. It
-// returns an error when concurrency is not positive or when
-// [Options.MaxWaitingRequests], [Options.Timeout] or [Options.MaxMemoryBytes]
-// is negative.
+// returns an error when concurrency is not positive or an [Options] field is
+// negative.
 func New(concurrency int, opts Options) (*Queue, error) {
 	switch {
 	case concurrency <= 0:
@@ -83,6 +90,8 @@ func New(concurrency int, opts Options) (*Queue, error) {
 		return nil, fmt.Errorf("Options.Timeout must not be negative, got %v", opts.Timeout)
 	case opts.MaxMemoryBytes < 0:
 		return nil, fmt.Errorf("Options.MaxMemoryBytes must not be negative, got %d", opts.MaxMemoryBytes)
+	case opts.CollectAboveBytes < 0:
+		return nil, fmt.Errorf("Options.CollectAboveBytes must not be negative, got %d", opts.CollectAboveBytes)
 	}
 
 	return &Queue{
@@ -90,6 +99,7 @@ func New(concurrency int, opts Options) (*Queue, error) {
 		slots:              concurrency,
 		bytes:              opts.MaxMemoryBytes,
 		capacity:           opts.MaxMemoryBytes,
+		collectAbove:       opts.CollectAboveBytes,
 		maxWaitingRequests: opts.MaxWaitingRequests,
 		timeout:            opts.Timeout,
 	}, nil
@@ -186,10 +196,34 @@ func (q *Queue) give(n int64) {
 }
 
 func (q *Queue) release(n int64) {
+	if q.collectDue(n) {
+		runtime.GC()
+	}
+
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
 	q.give(n)
+}
+
+// collectDue counts n as given back and reports whether the count passes
+// [Options.CollectAboveBytes], starting it again from 0 when it does.
+func (q *Queue) collectDue(n int64) bool {
+	if q.collectAbove == 0 {
+		return false
+	}
+
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	if n > q.collectAbove-q.uncollected {
+		q.uncollected = 0
+		return true
+	}
+
+	q.uncollected += n
+
+	return false
 }
 
 // wake admits waiters from the front while they fit.

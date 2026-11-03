@@ -107,16 +107,6 @@ func parseExtras(values url.Values) (extraSet, error) {
 	return extras, nil
 }
 
-// param returns the value of the query parameter named by name, or an error
-// when the query gives it more than once.
-func param(values url.Values, name string) (string, error) {
-	if n := len(values[name]); n > 1 {
-		return "", fmt.Errorf("%s is given %d times; give it once", name, n)
-	}
-
-	return values.Get(name), nil
-}
-
 // setEach sets the flag of each item of list. For an item without a flag it
 // returns an error saying what the query parameter named by name takes.
 func setEach(name, list, takes string, flags map[string]*bool) error {

@@ -90,8 +90,9 @@ type Fetcher struct {
 }
 
 // New returns a [Fetcher]. timeout is the time limit for each fetch, including
-// connection time, any redirects, and reading the body. maxBytes is the largest
-// image a fetch reads. It returns an error unless both are positive.
+// connection time, any redirects, and the time its body's reads wait on the
+// origin. maxBytes is the largest image a fetch reads. It returns an error
+// unless both are positive.
 func New(timeout time.Duration, maxBytes int64, opts Options) (*Fetcher, error) {
 	if timeout <= 0 {
 		return nil, fmt.Errorf("timeout must be more than zero, got %v", timeout)
@@ -132,9 +133,9 @@ func New(timeout time.Duration, maxBytes int64, opts Options) (*Fetcher, error) 
 
 // Fetch gets the image at rawURL, resolved against [Options.BaseURL]. The
 // image result is the response body: it must be closed, a read past [New]'s
-// maxBytes returns an [*http.MaxBytesError], and its PauseDeadline and
-// ResumeDeadline methods pause and resume [New]'s timeout. The declared
-// result is the response's Content-Length, or -1 when it is unknown.
+// maxBytes returns an [*http.MaxBytesError], and [New]'s timeout runs only
+// inside its reads. The declared result is the response's Content-Length, or
+// -1 when it is unknown.
 //
 // The error matches one of [ErrBadURL], [ErrBadRedirect], [ErrHostNotAllowed],
 // [ErrAddressNotAllowed] and [ErrTooManyRedirects] under [errors.Is], or is
@@ -188,6 +189,7 @@ func (f *Fetcher) Fetch(ctx context.Context, rawURL string) (image io.ReadCloser
 	}
 
 	limited := http.MaxBytesReader(nil, resp.Body, f.maxBytes)
+	dl.pause()
 
 	return &body{r: limited, dl: dl}, resp.ContentLength, nil
 }
@@ -235,15 +237,18 @@ func (f *Fetcher) checkRedirect(follow bool) func(*http.Request, []*http.Request
 	}
 }
 
-// body holds a fetch's response body and its deadline; closing it ends the
-// fetch.
+// body holds a fetch's response body and its deadline, which runs only inside
+// a read; closing it ends the fetch.
 type body struct {
 	r  io.ReadCloser
 	dl *deadline
 }
 
 func (b *body) Read(p []byte) (int, error) {
+	b.dl.resume()
 	n, err := b.r.Read(p)
+	b.dl.pause()
+
 	if err == nil || err == io.EOF {
 		return n, err
 	}
@@ -262,14 +267,6 @@ func (b *body) Read(p []byte) (int, error) {
 
 	return n, fmt.Errorf("%w: %w", class, err)
 }
-
-// PauseDeadline stops counting time against the timeout until
-// ResumeDeadline, unless the timeout has already run out.
-func (b *body) PauseDeadline() { b.dl.pause() }
-
-// ResumeDeadline starts counting time against the timeout again, from where
-// PauseDeadline stopped.
-func (b *body) ResumeDeadline() { b.dl.resume() }
 
 func (b *body) Close() error {
 	defer b.dl.stop()

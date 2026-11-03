@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"math"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -19,7 +18,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/superiority-dev/blurb/internal/config"
 	"github.com/superiority-dev/blurb/internal/testenv"
 	"github.com/superiority-dev/blurb/internal/testimage"
 	"github.com/superiority-dev/blurhash"
@@ -487,26 +485,6 @@ func TestRunErrors(t *testing.T) {
 				out.String(),
 				tc.want,
 			)
-		}
-	}
-}
-
-func TestSoftLimit(t *testing.T) {
-	cases := []struct {
-		limit  int64
-		source string
-		want   int64
-	}{
-		{limit: 1000, source: "sys/fs/cgroup/memory.max", want: 900},
-		{limit: 1023, source: "sys/fs/cgroup/memory.max", want: 921},
-		{limit: math.MaxInt64 - 1, source: "sys/fs/cgroup/memory.max", want: 8301034833169298226},
-		{limit: 1000, source: config.FromGOMEMLIMIT, want: 0},
-		{limit: 0, source: "none", want: 0},
-	}
-
-	for _, tc := range cases {
-		if got := softLimit(tc.limit, tc.source); got != tc.want {
-			t.Errorf("softLimit(%d, %q) = %d, want %d", tc.limit, tc.source, got, tc.want)
 		}
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"time"
 
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
@@ -40,9 +41,8 @@ type Config struct {
 	// MaxBodyBytes bounds the body POST /hash accepts.
 	MaxBodyBytes int64
 
-	// BodyTimeout bounds the time to read the body of POST /hash, which the
-	// decode reads as it goes; a wait for a decode slot does not count. It
-	// must be positive.
+	// BodyTimeout bounds the time the reads of a POST /hash body wait on the
+	// client, summed over the body. It must be positive.
 	BodyTimeout time.Duration
 
 	// PathPrefix, such as /v1, is prepended to /hash but not to the probes.
@@ -103,6 +103,32 @@ func apiHandler(hashAPI *api, logger *slog.Logger) http.Handler {
 	mux.HandleFunc("/", notFound)
 
 	return apiChain(hashAPI.requestIDHeader, logger)(mux)
+}
+
+// parseOptions returns the hashes and the extras the formats and extras
+// parameters ask for.
+func parseOptions(values url.Values) (formats formatSet, extras extraSet, err error) {
+	formats, err = parseFormats(values)
+	if err != nil {
+		return formatSet{}, extraSet{}, err
+	}
+
+	extras, err = parseExtras(values)
+	if err != nil {
+		return formatSet{}, extraSet{}, err
+	}
+
+	return formats, extras, nil
+}
+
+// param returns the value of the query parameter named by name, or an error
+// when the query gives it more than once.
+func param(values url.Values, name string) (string, error) {
+	if n := len(values[name]); n > 1 {
+		return "", fmt.Errorf("%s is given %d times; give it once", name, n)
+	}
+
+	return values.Get(name), nil
 }
 
 // fail writes the error response for err, with Retry-After for [queue.ErrBusy]

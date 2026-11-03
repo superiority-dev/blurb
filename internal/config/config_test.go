@@ -253,6 +253,7 @@ func TestDecodeLimits(t *testing.T) {
 			procs:      8,
 			want: DecodeLimits{
 				MaxMemoryBytes:       768,
+				CollectAboveBytes:    127,
 				MaxConcurrentDecodes: 3,
 				MaxWaitingRequests:   12,
 			},
@@ -264,6 +265,7 @@ func TestDecodeLimits(t *testing.T) {
 			procs:      8,
 			want: DecodeLimits{
 				MaxMemoryBytes:       750,
+				CollectAboveBytes:    125,
 				MaxConcurrentDecodes: 3,
 				MaxWaitingRequests:   0,
 			},
@@ -275,6 +277,7 @@ func TestDecodeLimits(t *testing.T) {
 			procs:      8,
 			want: DecodeLimits{
 				MaxMemoryBytes:       750,
+				CollectAboveBytes:    125,
 				MaxConcurrentDecodes: 3,
 				MaxWaitingRequests:   5,
 			},
@@ -286,8 +289,19 @@ func TestDecodeLimits(t *testing.T) {
 			procs:      1,
 			want: DecodeLimits{
 				MaxMemoryBytes:       6917529027641081855,
+				CollectAboveBytes:    1152921504606846975,
 				MaxConcurrentDecodes: 1,
 				MaxWaitingRequests:   4,
+			},
+		},
+		{
+			limit:      0,
+			concurrent: 2,
+			waiting:    -1,
+			procs:      8,
+			want: DecodeLimits{
+				MaxConcurrentDecodes: 2,
+				MaxWaitingRequests:   8,
 			},
 		},
 	}
@@ -339,6 +353,26 @@ func TestMemoryLimit(t *testing.T) {
 				"memoryLimit(%d) with %s = %d from %q, want %d from %q",
 				tc.gomemlimit, cgroupDesc, got, src, tc.want, tc.wantSrc,
 			)
+		}
+	}
+}
+
+func TestSoftMemoryLimit(t *testing.T) {
+	cases := []struct {
+		limit  int64
+		source string
+		want   int64
+	}{
+		{limit: 1000, source: "sys/fs/cgroup/memory.max", want: 900},
+		{limit: 1023, source: "sys/fs/cgroup/memory.max", want: 921},
+		{limit: math.MaxInt64 - 1, source: "sys/fs/cgroup/memory.max", want: 8301034833169298226},
+		{limit: 1000, source: FromGOMEMLIMIT, want: 0},
+		{limit: 0, source: "none", want: 0},
+	}
+
+	for _, tc := range cases {
+		if got := SoftMemoryLimit(tc.limit, tc.source); got != tc.want {
+			t.Errorf("SoftMemoryLimit(%d, %q) = %d, want %d", tc.limit, tc.source, got, tc.want)
 		}
 	}
 }

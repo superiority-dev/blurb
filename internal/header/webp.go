@@ -96,8 +96,8 @@ const (
 	webpAlpha = 5
 
 	// webpLossless is the bytes per pixel of a lossless WebP: an NRGBA
-	// image, beside its packed pixels while it unpacks a palette.
-	webpLossless = 6
+	// image.
+	webpLossless = 4
 )
 
 // webpKind is the bitstream a WebP's image data is in.

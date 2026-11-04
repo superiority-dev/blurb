@@ -1,0 +1,116 @@
+replicaCount: 1
+
+image:
+  # Also published as ghcr.io/superiority-dev/blurb.
+  repository: docker.io/superioritydev/blurb
+  # Overrides the image tag whose default is the chart appVersion.
+  tag: ""
+  # Pins the image by digest, such as sha256:...; a tag set beside it is kept
+  # for reading only.
+  digest: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+# Hosts GET may fetch images from, as BLURB_ALLOWED_HOSTS. Required. If you
+# only POST, give a name that never resolves, such as none.invalid.
+allowedHosts: []
+
+# Extra environment variables, such as the other BLURB_ settings or OTEL_
+# variables for metrics:
+#   - name: OTEL_METRICS_EXPORTER
+#     value: otlp
+#   - name: OTEL_EXPORTER_OTLP_ENDPOINT
+#     value: http://otel-collector:4318
+env: []
+
+# Containers added to the pod, such as an auth proxy in front of blurb.
+# Rendered as a template, so a field can refer to a value such as
+# {{ .Values.global.proxyImage }}.
+extraContainers: []
+
+podAnnotations: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: [ALL]
+
+service:
+  type: ClusterIP
+  port: 80
+  # The container port the Service sends traffic to, by name or number.
+  targetPort: http
+
+livenessProbe:
+  httpGet:
+    path: /healthz
+    port: http
+
+readinessProbe:
+  httpGet:
+    path: /readyz
+    port: http
+
+# blurb stops accepting connections on SIGTERM, so the pod first sleeps to
+# give Kubernetes time to remove it from the Service. The sleep action needs
+# Kubernetes 1.30 or later.
+lifecycle:
+  preStop:
+    sleep:
+      seconds: 5
+
+# Must exceed the preStop sleep plus BLURB_SHUTDOWN_TIMEOUT, 25s by default.
+terminationGracePeriodSeconds: 35
+
+# blurb budgets decode memory from the container memory limit, so set one:
+#   limits:
+#     memory: 512Mi
+#   requests:
+#     cpu: 250m
+#     memory: 512Mi
+resources: {}
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+topologySpreadConstraints: []
+
+# When enabled, set exactly one of minAvailable and maxUnavailable, such as
+# maxUnavailable: 1.
+podDisruptionBudget:
+  enabled: false
+
+networkPolicy:
+  enabled: false
+  # Peers allowed to reach blurb, required when enabled, such as the ingress
+  # controller's namespace:
+  #   - namespaceSelector:
+  #       matchLabels:
+  #         kubernetes.io/metadata.name: ingress-nginx
+  ingressFrom: []
+  # Ports those peers may reach, by name or number.
+  ingressPorts: [http]
+  # Ports blurb may fetch images on, to the addresses in egressTo. DNS to
+  # kube-dns is always allowed; NodeLocal DNSCache needs an extraEgress rule.
+  egressPorts: [443]
+  egressTo:
+    - ipBlock:
+        cidr: 0.0.0.0/0
+        except:
+          - 10.0.0.0/8
+          - 172.16.0.0/12
+          - 192.168.0.0/16
+          - 169.254.0.0/16
+  # More egress rules, such as one to an OpenTelemetry collector.
+  extraEgress: []

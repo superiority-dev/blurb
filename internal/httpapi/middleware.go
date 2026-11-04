@@ -123,7 +123,7 @@ func logRequests(logger *slog.Logger) middleware {
 					slog.String("method", r.Method),
 					slog.String("route", r.Pattern),
 					slog.Int("status", rec.status),
-					slog.Duration("took", time.Since(start)),
+					slog.Duration("duration_ns", time.Since(start)),
 					slog.String(logKeyRequestID, requestIDFrom(r.Context())),
 				}
 				level := statusLevel(rec.status)
@@ -179,7 +179,7 @@ func recoverPanics(logger *slog.Logger) middleware {
 				logger.ErrorContext(
 					r.Context(),
 					"panic",
-					slog.Any("value", e),
+					slog.Any("panic_value", e),
 					slog.String(logKeyRequestID, requestIDFrom(r.Context())),
 				)
 

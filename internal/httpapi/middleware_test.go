@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/superiority-dev/blurb/internal/fetch"
 	"github.com/superiority-dev/blurb/internal/queue"
@@ -73,8 +74,8 @@ func TestLogRequests(t *testing.T) {
 		"request_id":    "req-1",
 	})
 
-	if lines[0]["took"] == nil {
-		t.Errorf("log %q, want a took", logs.String())
+	if d, ok := lines[0]["duration_ns"].(float64); !ok || d < 1 || d >= float64(time.Second) {
+		t.Errorf("log %q, want a duration_ns between 1 and 1e9", logs.String())
 	}
 }
 
@@ -138,7 +139,7 @@ func TestRecoverPanicsLogged(t *testing.T) {
 	}
 
 	checkLog(t, logs,
-		map[string]any{slog.MessageKey: "panic", "value": "boom", "request_id": "req-7"},
+		map[string]any{slog.MessageKey: "panic", "panic_value": "boom", "request_id": "req-7"},
 		map[string]any{
 			slog.MessageKey: "request",
 			"status":        float64(http.StatusInternalServerError),

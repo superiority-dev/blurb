@@ -115,7 +115,7 @@ func TestMetrics(t *testing.T) {
 			"blurb.code=too_large,blurb.format=jpeg":          1,
 			"blurb.code=too_large,blurb.format=gif":           1,
 		},
-		"blurb.refused": {
+		"blurb.queue.refused": {
 			"blurb.queue=decode,blurb.reason=too_large": 1,
 			"blurb.queue=hash,blurb.reason=busy":        2,
 		},
@@ -229,7 +229,7 @@ func TestMetricsRefuse(t *testing.T) {
 
 	got, _ := collect(t, reader)
 	checkPoints(t, got, map[string]map[string]float64{
-		"blurb.refused": {
+		"blurb.queue.refused": {
 			"blurb.queue=decode,blurb.reason=busy":      1,
 			"blurb.queue=decode,blurb.reason=timeout":   1,
 			"blurb.queue=decode,blurb.reason=too_large": 1,

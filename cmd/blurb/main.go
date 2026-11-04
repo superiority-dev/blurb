@@ -118,7 +118,7 @@ func run(ctx context.Context, args []string, lookup func(string) (string, bool),
 		slog.Int64("collect_above_bytes", queueOpts.CollectAboveBytes),
 		slog.Int("max_concurrent_decodes", decodeLimits.MaxConcurrentDecodes),
 		slog.Int("max_waiting_requests", queueOpts.MaxWaitingRequests),
-		slog.Duration("queue_timeout", queueOpts.Timeout),
+		slog.Duration("queue_timeout_ns", queueOpts.Timeout),
 		slog.Int64("max_pixels", cfg.MaxPixels),
 		slog.String("blurhash_components", fmt.Sprintf("%dx%d", cfg.XComponents, cfg.YComponents)),
 	)
@@ -198,7 +198,7 @@ func run(ctx context.Context, args []string, lookup func(string) (string, bool),
 	}
 
 	ready.Set(false)
-	logger.Info("shutting down", slog.Duration("timeout", cfg.ShutdownTimeout))
+	logger.Info("shutting down", slog.Duration("shutdown_timeout_ns", cfg.ShutdownTimeout))
 
 	shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cfg.ShutdownTimeout)
 	defer cancel()

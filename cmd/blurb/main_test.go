@@ -26,7 +26,7 @@ import (
 // TestRunServes requires the service to listen, report ready, apply its path
 // prefix, pixel limit, BlurHash components, request id header and body
 // deadline, serve the probes outside the prefix, and stop cleanly when its
-// context ends.
+// context ends, logging its shutdown timeout in nanoseconds.
 func TestRunServes(t *testing.T) {
 	// A soft memory limit of 64 MiB, as GOMEMLIMIT sets it, below any cgroup
 	// limit a test machine sets.
@@ -48,6 +48,7 @@ func TestRunServes(t *testing.T) {
 			"BLURB_BLURHASH_COMPONENTS", "5x2",
 			"BLURB_MAX_CONCURRENT_DECODES", "3",
 			"BLURB_QUEUE_TIMEOUT", "2s",
+			"BLURB_SHUTDOWN_TIMEOUT", "3s",
 		), logs)
 	}()
 
@@ -55,7 +56,6 @@ func TestRunServes(t *testing.T) {
 
 	// MAX_WAITING_REQUESTS unset: four waiting per decode. The decodes get
 	// three quarters of the limit, and the soft limit stays GOMEMLIMIT's.
-	// slog writes a duration in nanoseconds.
 	if len(before) == 0 ||
 		before[0]["memory_limit_bytes"] != float64(64<<20) ||
 		before[0]["memory_limit_source"] != "GOMEMLIMIT" ||
@@ -63,10 +63,11 @@ func TestRunServes(t *testing.T) {
 		before[0]["decode_memory_bytes"] != float64(48<<20) ||
 		before[0]["max_concurrent_decodes"] != float64(3) ||
 		before[0]["max_waiting_requests"] != float64(12) ||
-		before[0]["queue_timeout"] != float64(2*time.Second) {
+		before[0]["queue_timeout_ns"] != float64(2*time.Second) {
 		t.Errorf(
 			"starting line %v, want memory_limit_bytes 64 MiB from GOMEMLIMIT, soft_memory_limit_bytes 64 MiB, "+
-				"decode_memory_bytes 48 MiB, max_concurrent_decodes 3, max_waiting_requests 12 and queue_timeout 2s",
+				"decode_memory_bytes 48 MiB, max_concurrent_decodes 3, max_waiting_requests 12 "+
+				"and queue_timeout_ns 2s",
 			before,
 		)
 	}
@@ -148,6 +149,19 @@ func TestRunServes(t *testing.T) {
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("run did not stop")
+	}
+
+	var stopping map[string]any
+
+	for len(logs) > 0 {
+		var record map[string]any
+		if err := json.Unmarshal([]byte(<-logs), &record); err == nil && record[slog.MessageKey] == "shutting down" {
+			stopping = record
+		}
+	}
+
+	if stopping["shutdown_timeout_ns"] != float64(3*time.Second) {
+		t.Errorf("shutting down line %v, want shutdown_timeout_ns 3s", stopping)
 	}
 }
 

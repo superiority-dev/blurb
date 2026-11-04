@@ -65,7 +65,7 @@ type metrics struct {
 // observed at each collection.
 func newMetrics(meter metric.Meter, hashQueue, decodeQueue *queue.Queue) (*metrics, error) {
 	refused, err := meter.Int64Counter(
-		"blurb.refused",
+		"blurb.queue.refused",
 		metric.WithDescription("Requests refused by a queue."),
 		metric.WithUnit(unitRequests),
 	)

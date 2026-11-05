@@ -11,7 +11,7 @@ image:
   pullPolicy: IfNotPresent
 
 imagePullSecrets: []
-nameOverride: ""
+nameOverride: blurb
 fullnameOverride: ""
 
 # Hosts GET may fetch images from, as BLURB_ALLOWED_HOSTS. Required. If you

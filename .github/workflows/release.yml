@@ -42,25 +42,46 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Refuse a version that is already published
+      - name: Find the registries that already have this version
+        id: published
         env:
           VERSION: ${{ steps.meta.outputs.version }}
           GHCR_IMAGE: ghcr.io/${{ github.repository }}
         run: |
           image=docker.io/superioritydev/blurb:$VERSION
           if out=$(docker buildx imagetools inspect "$image" 2>&1); then
-            echo "::error::$image is already published"
-            exit 1
+            dockerhub=true
           elif ! grep -q 'not found' <<< "$out"; then
             echo "::error::cannot tell whether $image exists: $out"
             exit 1
           fi
           if docker buildx imagetools inspect "$GHCR_IMAGE:$VERSION" > /dev/null 2>&1; then
-            echo "::error::$GHCR_IMAGE:$VERSION is already published"
+            ghcr=true
+          fi
+          if [ -n "$dockerhub" ] && [ -n "$ghcr" ]; then
+            echo "::error::$VERSION is already published"
             exit 1
           fi
+          echo "dockerhub=$dockerhub" >> "$GITHUB_OUTPUT"
+          echo "ghcr=$ghcr" >> "$GITHUB_OUTPUT"
 
-      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+      - name: Copy the image to the registry an earlier run did not reach
+        if: steps.published.outputs.dockerhub != steps.published.outputs.ghcr
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+          GHCR_IMAGE: ghcr.io/${{ github.repository }}
+          DOCKERHUB_HAS_IT: ${{ steps.published.outputs.dockerhub }}
+        run: |
+          from=docker.io/superioritydev/blurb
+          to=$GHCR_IMAGE
+          if [ -z "$DOCKERHUB_HAS_IT" ]; then
+            from=$GHCR_IMAGE
+            to=docker.io/superioritydev/blurb
+          fi
+          docker buildx imagetools create --tag "$to:$VERSION" --tag "$to:latest" "$from:$VERSION"
+
+      - if: steps.published.outputs.dockerhub == '' && steps.published.outputs.ghcr == ''
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           platforms: linux/amd64,linux/arm64
@@ -177,15 +198,34 @@ jobs:
           version: v3.16.1
 
       - env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ACTOR: ${{ github.actor }}
           OWNER: ${{ github.repository_owner }}
         run: |
           version=${GITHUB_REF_NAME#v}
           helm package deploy/helm --version "$version" --app-version "$version"
+          echo "$DOCKERHUB_TOKEN" | helm registry login registry-1.docker.io --username "$DOCKERHUB_USERNAME" --password-stdin
           echo "$GITHUB_TOKEN" | helm registry login ghcr.io --username "$ACTOR" --password-stdin
-          if helm show chart "oci://ghcr.io/$OWNER/charts/blurb" --version "$version" > /dev/null 2>&1; then
+          chart=blurb-chart-$version.tgz
+          pushed=
+          if out=$(helm show chart oci://registry-1.docker.io/superioritydev/blurb-chart --version "$version" 2>&1); then
+            echo "::notice::Docker Hub already has chart $version"
+          elif grep -q 'not found' <<< "$out"; then
+            helm push "$chart" oci://registry-1.docker.io/superioritydev
+            pushed=1
+          else
+            echo "::error::cannot tell whether Docker Hub has chart $version: $out"
+            exit 1
+          fi
+          if helm show chart "oci://ghcr.io/$OWNER/charts/blurb-chart" --version "$version" > /dev/null 2>&1; then
+            echo "::notice::ghcr.io already has chart $version"
+          else
+            helm push "$chart" "oci://ghcr.io/$OWNER/charts"
+            pushed=1
+          fi
+          if [ -z "$pushed" ]; then
             echo "::error::chart $version is already published"
             exit 1
           fi
-          helm push "blurb-$version.tgz" "oci://ghcr.io/$OWNER/charts"

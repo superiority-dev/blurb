@@ -74,11 +74,15 @@ read-only filesystem and no capabilities.
 On Kubernetes, install the Helm chart:
 
 ```
-helm install blurb oci://ghcr.io/superiority-dev/charts/blurb \
+helm install blurb oci://registry-1.docker.io/superioritydev/blurb-chart \
   --set 'allowedHosts={images.example.com}' --set resources.limits.memory=512Mi
 ```
 
 The full chart is in [deploy/helm](deploy/helm).
+
+The image and the chart are also on GitHub Container Registry, as
+`ghcr.io/superiority-dev/blurb` and
+`oci://ghcr.io/superiority-dev/charts/blurb-chart`.
 
 Binaries for Linux, macOS and Windows, on amd64 and arm64, are on the
 [releases page](https://github.com/superiority-dev/blurb/releases).

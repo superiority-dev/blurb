@@ -1,6 +1,6 @@
 apiVersion: v2
 name: blurb-chart
-description: "Production-ready service for image placeholders: BlurHash, ThumbHash, LQIP or average color"
+description: "Helm chart for blurb, a service for image placeholders: BlurHash, ThumbHash, LQIP or average color"
 type: application
 version: 1.0.0
 appVersion: "1.0.0"

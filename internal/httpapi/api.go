@@ -52,11 +52,11 @@ func newAPI(cfg Config, fetcher *fetch.Fetcher, hashQueue, decodeQueue *queue.Qu
 }
 
 type formatSet struct {
-	blurHash, thumbHash bool
+	blurHash, thumbHash, lqip bool
 }
 
-// parseFormats returns the hashes the formats parameter, a comma-separated
-// list, asks for, or defaultFormats when it is empty or not given.
+// parseFormats returns what the formats parameter, a comma-separated list,
+// asks for, or defaultFormats when it is empty or not given.
 func parseFormats(values url.Values) (formatSet, error) {
 	list, err := param(values, paramFormats)
 	if err != nil {
@@ -69,9 +69,10 @@ func parseFormats(values url.Values) (formatSet, error) {
 
 	var formats formatSet
 
-	err = setEach(paramFormats, list, "blurhash, thumbhash or both", map[string]*bool{
+	err = setEach(paramFormats, list, "any of blurhash, thumbhash and lqip", map[string]*bool{
 		"blurhash":  &formats.blurHash,
 		"thumbhash": &formats.thumbHash,
+		"lqip":      &formats.lqip,
 	})
 	if err != nil {
 		return formatSet{}, err
@@ -81,7 +82,7 @@ func parseFormats(values url.Values) (formatSet, error) {
 }
 
 type extraSet struct {
-	dominantColors, pHash, lqip, sha256 bool
+	dominantColors, pHash, sha256 bool
 }
 
 // parseExtras returns the extra values the extras parameter, a comma-separated
@@ -94,10 +95,9 @@ func parseExtras(values url.Values) (extraSet, error) {
 
 	var extras extraSet
 
-	err = setEach(paramExtras, list, "any of dominant_colors, phash, lqip and sha256", map[string]*bool{
+	err = setEach(paramExtras, list, "any of dominant_colors, phash and sha256", map[string]*bool{
 		"dominant_colors": &extras.dominantColors,
 		"phash":           &extras.pHash,
-		"lqip":            &extras.lqip,
 		"sha256":          &extras.sha256,
 	})
 	if err != nil {

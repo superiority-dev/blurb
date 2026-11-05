@@ -118,6 +118,12 @@ func (h *hasher) hash(
 		}
 	}
 
+	if formats.lqip {
+		if res.LQIP, err = lqip.DataURI(small); err != nil {
+			return hashResponse{}, err
+		}
+	}
+
 	if extras.dominantColors {
 		for _, dominant := range colors.Dominant(small) {
 			res.DominantColors = append(res.DominantColors, swatch{
@@ -134,12 +140,6 @@ func (h *hasher) hash(
 		}
 
 		res.PHash = hex64(hash)
-	}
-
-	if extras.lqip {
-		if res.LQIP, err = lqip.DataURI(small); err != nil {
-			return hashResponse{}, err
-		}
 	}
 
 	if extras.sha256 {
@@ -175,6 +175,7 @@ func (h *hasher) decode(
 type hashResponse struct {
 	BlurHash       string             `json:"blurhash,omitempty"`
 	ThumbHash      []byte             `json:"thumbhash,omitempty"`
+	LQIP           string             `json:"lqip,omitempty"`
 	Width          int                `json:"width"`
 	Height         int                `json:"height"`
 	Aspect         float64            `json:"aspect"`
@@ -185,7 +186,6 @@ type hashResponse struct {
 	Color          string             `json:"color"`
 	DominantColors []swatch           `json:"dominant_colors,omitempty"`
 	PHash          string             `json:"phash,omitempty"`
-	LQIP           string             `json:"lqip,omitempty"`
 	SHA256         string             `json:"sha256,omitempty"`
 }
 

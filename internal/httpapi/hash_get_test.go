@@ -73,21 +73,21 @@ func TestHashGet(t *testing.T) {
 		t.Errorf("metadata in %s", rec.Body.String())
 	}
 
-	for _, extra := range []string{"dominant_colors", "phash", "lqip", "sha256"} {
-		if strings.Contains(rec.Body.String(), `"`+extra+`"`) {
-			t.Errorf("%s present without being asked for: %s", extra, rec.Body.String())
+	for _, key := range []string{"lqip", "dominant_colors", "phash", "sha256"} {
+		if strings.Contains(rec.Body.String(), `"`+key+`"`) {
+			t.Errorf("%s present without being asked for: %s", key, rec.Body.String())
 		}
 	}
 }
 
 // TestHashGetExtras requires each extra asked for to come back under its own
-// key, and an unknown extra to answer 400.
+// key, and an unknown extra or a format name to answer 400.
 func TestHashGetExtras(t *testing.T) {
 	origin := newOrigin(t)
 	h := apiHandler(testAPI(t), discardLogger)
 	photo := url.QueryEscape(origin.URL + "/photo.jpg")
 
-	rec := serve(h, http.MethodGet, "/hash?extras=dominant_colors,phash,lqip,sha256&url="+photo, nil)
+	rec := serve(h, http.MethodGet, "/hash?extras=dominant_colors,phash,sha256&url="+photo, nil)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("got %d %s", rec.Code, rec.Body.String())
 	}
@@ -97,7 +97,7 @@ func TestHashGetExtras(t *testing.T) {
 			Color string
 			Share float64
 		} `json:"dominant_colors"`
-		PHash, LQIP, SHA256 string
+		PHash, SHA256 string
 	}
 
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
@@ -109,33 +109,38 @@ func TestHashGetExtras(t *testing.T) {
 		!hexColorPattern.MatchString(got.DominantColors[0].Color) ||
 		got.DominantColors[0].Share <= 0 ||
 		len(got.PHash) != 16 ||
-		!strings.HasPrefix(got.LQIP, "data:image/png;base64,") ||
 		got.SHA256 != hex.EncodeToString(sum[:]) {
 		t.Errorf("extras in %s", rec.Body.String())
 	}
 
-	if rec := serve(h, http.MethodGet, "/hash?extras=exif&url="+photo, nil); rec.Code != http.StatusBadRequest {
-		t.Errorf("extras=exif: %d, want 400", rec.Code)
+	for _, extra := range []string{"exif", "blurhash", "thumbhash", "lqip"} {
+		rec := serve(h, http.MethodGet, "/hash?extras="+extra+"&url="+photo, nil)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("extras=%s: %d, want 400", extra, rec.Code)
+		}
 	}
 }
 
-// TestHashGetFormats requires formats to choose the hashes and to default to
-// both, and an unknown format to answer 400.
+// TestHashGetFormats requires formats to choose what comes back and to default
+// to both hashes, and an unknown format to answer 400.
 func TestHashGetFormats(t *testing.T) {
 	origin := newOrigin(t)
 	h := apiHandler(testAPI(t), discardLogger)
 	photo := url.QueryEscape(origin.URL + "/photo.jpg")
 
 	cases := []struct {
-		formats         string
-		status          int
-		blurhash, thumb bool
+		formats               string
+		status                int
+		blurhash, thumb, lqip bool
 	}{
-		{formats: "", status: http.StatusOK, blurhash: true, thumb: true},
-		{formats: "blurhash", status: http.StatusOK, blurhash: true, thumb: false},
-		{formats: "thumbhash", status: http.StatusOK, blurhash: false, thumb: true},
-		{formats: "blurhash,thumbhash", status: http.StatusOK, blurhash: true, thumb: true},
-		{formats: "averagehash", status: http.StatusBadRequest, blurhash: false, thumb: false},
+		{formats: "", status: http.StatusOK, blurhash: true, thumb: true, lqip: false},
+		{formats: "blurhash", status: http.StatusOK, blurhash: true, thumb: false, lqip: false},
+		{formats: "thumbhash", status: http.StatusOK, blurhash: false, thumb: true, lqip: false},
+		{formats: "lqip", status: http.StatusOK, blurhash: false, thumb: false, lqip: true},
+		{formats: "blurhash,thumbhash", status: http.StatusOK, blurhash: true, thumb: true, lqip: false},
+		{formats: "thumbhash,lqip", status: http.StatusOK, blurhash: false, thumb: true, lqip: true},
+		{formats: "averagehash", status: http.StatusBadRequest, blurhash: false, thumb: false, lqip: false},
+		{formats: "phash", status: http.StatusBadRequest, blurhash: false, thumb: false, lqip: false},
 	}
 
 	for _, tc := range cases {
@@ -144,7 +149,8 @@ func TestHashGetFormats(t *testing.T) {
 
 		if rec.Code != tc.status ||
 			strings.Contains(body, `"blurhash"`) != tc.blurhash ||
-			strings.Contains(body, `"thumbhash"`) != tc.thumb {
+			strings.Contains(body, `"thumbhash"`) != tc.thumb ||
+			strings.Contains(body, `"lqip":"data:image/png;base64,`) != tc.lqip {
 			t.Errorf("formats=%q: %d %s", tc.formats, rec.Code, body)
 		}
 	}

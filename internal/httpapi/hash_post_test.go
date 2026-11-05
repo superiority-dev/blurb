@@ -371,8 +371,8 @@ func FuzzHashPost(f *testing.F) {
 	jpegBytes := testimage.GradientJPEG(f, 30, 20)
 
 	f.Add("", jpegBytes)
-	f.Add("formats=blurhash,thumbhash&extras=dominant_colors,phash,lqip,sha256", jpegBytes)
-	f.Add("formats=thumbhash&extras=lqip", testimage.WebPAnimated())
+	f.Add("formats=blurhash,thumbhash,lqip&extras=dominant_colors,phash,sha256", jpegBytes)
+	f.Add("formats=thumbhash,lqip", testimage.WebPAnimated())
 	f.Add("extras=sha256", testimage.GIFAnimated())
 	f.Add("formats=&formats=blurhash", testimage.WebPLossyAlpha())
 	f.Add("extras=%zz", []byte("not an image"))

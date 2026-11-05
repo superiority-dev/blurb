@@ -105,8 +105,7 @@ func apiHandler(hashAPI *api, logger *slog.Logger) http.Handler {
 	return apiChain(hashAPI.requestIDHeader, logger)(mux)
 }
 
-// parseOptions returns the hashes and the extras the formats and extras
-// parameters ask for.
+// parseOptions returns what the formats and extras parameters ask for.
 func parseOptions(values url.Values) (formats formatSet, extras extraSet, err error) {
 	formats, err = parseFormats(values)
 	if err != nil {

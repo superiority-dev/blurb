@@ -80,7 +80,7 @@ jobs:
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.licenses=Apache-2.0
           annotations: |
-            index:org.opencontainers.image.description=HTTP service that returns BlurHash and ThumbHash placeholders of an image
+            index:org.opencontainers.image.description=Production-ready service for image placeholders: BlurHash, ThumbHash, LQIP or average color
             index:org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             index:org.opencontainers.image.version=${{ steps.meta.outputs.version }}
             index:org.opencontainers.image.revision=${{ github.sha }}
@@ -106,7 +106,7 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_DESCRIPTION_TOKEN }}
           repository: superioritydev/blurb
-          short-description: BlurHash and ThumbHash placeholders of an image, with its size and average color, over HTTP
+          short-description: "Production-ready service for image placeholders: BlurHash, ThumbHash, LQIP or average color"
           readme-filepath: ./README.md
           enable-url-completion: true
 

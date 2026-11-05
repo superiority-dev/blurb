@@ -6,18 +6,24 @@ updates:
       interval: weekly
     commit-message:
       prefix: ci
+    assignees:
+      - likvidatorTM
   - package-ecosystem: docker
     directory: /
     schedule:
       interval: weekly
     commit-message:
       prefix: build
+    assignees:
+      - likvidatorTM
   - package-ecosystem: gomod
     directory: /
     schedule:
       interval: weekly
     commit-message:
       prefix: deps
+    assignees:
+      - likvidatorTM
     groups:
       opentelemetry:
         patterns:

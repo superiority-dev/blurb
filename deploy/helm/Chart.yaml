@@ -2,8 +2,8 @@ apiVersion: v2
 name: blurb
 description: HTTP service that returns BlurHash and ThumbHash placeholders of an image
 type: application
-version: 0.1.0
-appVersion: "0.1.0"
+version: 1.0.0
+appVersion: "1.0.0"
 kubeVersion: ">=1.30.0-0"
 home: https://github.com/superiority-dev/blurb
 sources:

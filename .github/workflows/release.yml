@@ -42,6 +42,21 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Refuse a version that is already published
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+          GHCR_IMAGE: ghcr.io/${{ github.repository }}
+        run: |
+          for image in "docker.io/superioritydev/blurb:$VERSION" "$GHCR_IMAGE:$VERSION"; do
+            if out=$(docker buildx imagetools inspect "$image" 2>&1); then
+              echo "::error::$image is already published"
+              exit 1
+            elif ! grep -q 'not found' <<< "$out"; then
+              echo "::error::cannot tell whether $image exists: $out"
+              exit 1
+            fi
+          done
+
       - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
@@ -111,11 +126,12 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
         run: |
-          if gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1; then
-            gh release upload "$GITHUB_REF_NAME" --clobber dist/*.tar.gz dist/*.zip dist/checksums.txt
-          else
-            gh release create "$GITHUB_REF_NAME" --draft --verify-tag --title "$GITHUB_REF_NAME" dist/*.tar.gz dist/*.zip dist/checksums.txt
+          tags=$(gh api --paginate "repos/$GH_REPO/releases" --jq '.[].tag_name')
+          if grep -qxF -- "$GITHUB_REF_NAME" <<< "$tags"; then
+            echo "::error::a release of $GITHUB_REF_NAME already exists"
+            exit 1
           fi
+          gh release create "$GITHUB_REF_NAME" --draft --verify-tag --title "$GITHUB_REF_NAME" dist/*.tar.gz dist/*.zip dist/checksums.txt
 
   chart:
     needs: image
@@ -141,4 +157,8 @@ jobs:
           version=${GITHUB_REF_NAME#v}
           helm package deploy/helm --version "$version" --app-version "$version"
           echo "$GITHUB_TOKEN" | helm registry login ghcr.io --username "$ACTOR" --password-stdin
+          if helm show chart "oci://ghcr.io/$OWNER/charts/blurb" --version "$version" > /dev/null 2>&1; then
+            echo "::error::chart $version is already published"
+            exit 1
+          fi
           helm push "blurb-$version.tgz" "oci://ghcr.io/$OWNER/charts"

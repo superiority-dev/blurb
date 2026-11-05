@@ -47,15 +47,18 @@ jobs:
           VERSION: ${{ steps.meta.outputs.version }}
           GHCR_IMAGE: ghcr.io/${{ github.repository }}
         run: |
-          for image in "docker.io/superioritydev/blurb:$VERSION" "$GHCR_IMAGE:$VERSION"; do
-            if out=$(docker buildx imagetools inspect "$image" 2>&1); then
-              echo "::error::$image is already published"
-              exit 1
-            elif ! grep -q 'not found' <<< "$out"; then
-              echo "::error::cannot tell whether $image exists: $out"
-              exit 1
-            fi
-          done
+          image=docker.io/superioritydev/blurb:$VERSION
+          if out=$(docker buildx imagetools inspect "$image" 2>&1); then
+            echo "::error::$image is already published"
+            exit 1
+          elif ! grep -q 'not found' <<< "$out"; then
+            echo "::error::cannot tell whether $image exists: $out"
+            exit 1
+          fi
+          if docker buildx imagetools inspect "$GHCR_IMAGE:$VERSION" > /dev/null 2>&1; then
+            echo "::error::$GHCR_IMAGE:$VERSION is already published"
+            exit 1
+          fi
 
       - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:

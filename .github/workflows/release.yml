@@ -86,6 +86,30 @@ jobs:
             index:org.opencontainers.image.revision=${{ github.sha }}
             index:org.opencontainers.image.licenses=Apache-2.0
 
+  description:
+    needs: image
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The action makes markdown links absolute, but not HTML img tags.
+      - name: Make the README's image paths absolute
+        run: sed -i "s|src=\"\.github/|src=\"$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/raw/$GITHUB_REF_NAME/.github/|g" README.md
+
+      - uses: peter-evans/dockerhub-description@1b9a80c056b620d92cedb9d9b5a223409c68ddfa # v5.0.0
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_DESCRIPTION_TOKEN }}
+          repository: superioritydev/blurb
+          short-description: BlurHash and ThumbHash placeholders of an image, with its size and average color, over HTTP
+          readme-filepath: ./README.md
+          enable-url-completion: true
+
   binaries:
     runs-on: ubuntu-24.04
     timeout-minutes: 30

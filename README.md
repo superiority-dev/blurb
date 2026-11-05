@@ -51,13 +51,28 @@ $ curl --data-binary @photo.jpg http://localhost:8080/hash
 
 ## Install
 
-Requires Go 1.26 or later.
+Run the image from Docker Hub:
 
 ```
-git clone https://github.com/superiority-dev/blurb
-cd blurb
-go build -o blurb ./cmd/blurb
+docker run --rm -p 127.0.0.1:8080:8080 --memory 512m \
+  -e BLURB_ALLOWED_HOSTS=images.example.com superioritydev/blurb
 ```
+
+`docker compose -f deploy/compose.yaml up` runs it for `POST` only, with a
+read-only filesystem and no capabilities.
+
+On Kubernetes, install the Helm chart:
+
+```
+helm install blurb oci://ghcr.io/superiority-dev/charts/blurb \
+  --set 'allowedHosts={images.example.com}' --set resources.limits.memory=512Mi
+```
+
+Its [values.yaml](deploy/helm/values.yaml) covers probes, resources, extra
+environment variables, an optional NetworkPolicy and a PodDisruptionBudget.
+
+Binaries for Linux, macOS and Windows, on amd64 and arm64, are on the
+[releases page](https://github.com/superiority-dev/blurb/releases).
 
 ## Usage
 
